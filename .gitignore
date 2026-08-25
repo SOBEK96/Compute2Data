@@ -1,0 +1,47 @@
+# Dependencies & Build Output
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+
+# Python & Testing
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.venv/
+venv/
+
+# Environment & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+*.keystore
+keystores/
+*.pem
+*.key
+
+# Operating System & IDEs
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# GenLayer Local Artifacts
+.genlayer/
+local_state/

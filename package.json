@@ -1,0 +1,14 @@
+{
+  "name": "compute2data",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @compute2data/web",
+    "build": "npm run build --workspace @compute2data/web",
+    "lint": "npm run lint --workspace @compute2data/web",
+    "typecheck": "npm run typecheck --workspace @compute2data/web"
+  }
+}
