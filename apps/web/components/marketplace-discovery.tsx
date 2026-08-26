@@ -102,10 +102,10 @@ export function MarketplaceDiscovery() {
               </span>
               <span className="rounded-full border border-line bg-carbon/80 px-3 py-1 font-mono text-[10px] text-muted">
                 {loadState === "live"
-                  ? "🟢 Connected to StudioNet Contract"
+                  ? "Connected to StudioNet Contract"
                   : loadState === "loading"
-                    ? "🟡 Reading On-Chain Index..."
-                    : "🔵 Live Protocol Ready"}
+                    ? "Reading On-Chain Index..."
+                    : "Live Protocol Ready"}
               </span>
             </div>
 
@@ -117,7 +117,7 @@ export function MarketplaceDiscovery() {
                 </span>
               </h1>
               <p className="max-w-2xl text-base leading-relaxed text-muted sm:text-lg">
-                Discover high-value private datasets and execute AI training or inference directly within secure enclaves. Funds remain protected in escrow until GenLayer’s Multi-LLM consensus validates the execution proof.
+                Discover high-value private datasets and execute AI training or inference directly within secure enclaves. Funds remain protected in escrow until GenLayer's Multi-LLM consensus validates the execution proof.
               </p>
             </div>
 

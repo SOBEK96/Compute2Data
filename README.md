@@ -181,9 +181,9 @@ Compute2Dataata follows the rigorous **Spec-Driven Development (SDD)** process p
 | **Chain ID** | `500000` (`0x7a120`) |
 | **Native Token** | **GEN** |
 | **RPC Endpoint** | `https://studio.genlayer.com/api` |
-| **Active Contract v2.0** | [`0x08A1DF5D8f1DE7Cced7E03E8055E7c106eb13987`](https://studio.genlayer.com) |
-| **Deployer Address** | `0x24bBd4C2d429941E073181ab21a71621012A9D4A` |
-| **Deployment Transaction**| `0xb2ebc42a3c0bd49810e5f7254a7b4f5f41193f61c742c42a472995528eca0ff2` |
+| **Active Contract v2.0** | [`0xD63B71E7cC32C8A81dFd1A26b89D4c059BE15226`](https://studio.genlayer.com) |
+| **Deployer Address** | `0xEE4f024609b50293a5806a6bDBd0c146257FdfAc` |
+| **Deployment Transaction**| `0x5ab76291694bdeeacd327e49eedbdad8f4d98037f8bb7c2c8069a37531210231` |
 | **Consensus Receipt** | `ACCEPTED` / `MAJORITY_AGREE` (100% Validator Agreement) |
 
 ### Genesis Verification Transactions

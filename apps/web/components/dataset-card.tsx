@@ -76,7 +76,7 @@ export function DatasetCard({ dataset, index, onCompute }: DatasetCardProps) {
           <div>
             <span className="label-caps block text-[9px]">Schema / Scale</span>
             <span className="mt-1 block truncate font-mono text-xs font-semibold text-paper">
-              {dataset.format} • {dataset.scale}
+              {dataset.format} - {dataset.scale}
             </span>
           </div>
           <div>

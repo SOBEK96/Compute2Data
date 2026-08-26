@@ -3,7 +3,7 @@
 **Feature ID**: `002-c2d-contract-levelup`  
 **Specification**: [`specs/002-c2d-contract-levelup/spec.md`](file:///Users/ehs4n/Compute2Data/specs/002-c2d-contract-levelup/spec.md)  
 **Plan**: [`specs/002-c2d-contract-levelup/plan.md`](file:///Users/ehs4n/Compute2Data/specs/002-c2d-contract-levelup/plan.md)  
-**Deployed Contract Address**: `0x08A1DF5D8f1DE7Cced7E03E8055E7c106eb13987`  
+**Deployed Contract Address**: `0xD63B71E7cC32C8A81dFd1A26b89D4c059BE15226`  
 **Status**: `100% COMPLETED & VERIFIED ON STUDIONET`
 
 ---
@@ -33,7 +33,7 @@
 
 ## Phase 3: Deployment & Live StudioNet Verification
 
-- [x] **TASK-002-14**: Deploy upgraded v2 contract to GenLayer StudioNet (`0x08A1DF5D8f1DE7Cced7E03E8055E7c106eb13987`).
+- [x] **TASK-002-14**: Deploy upgraded v2 contract (enclave attestation + full state machine) to GenLayer StudioNet (`0xD63B71E7cC32C8A81dFd1A26b89D4c059BE15226`, Tx `0x5ab76291694bdeeacd327e49eedbdad8f4d98037f8bb7c2c8069a37531210231`).
 - [x] **TASK-002-15**: Verify on-chain consensus receipt (`MAJORITY_AGREE`, Tx `0x3b1464a9b5c01cd3c656f9c2520a7112387c580a2ac8d3f78c8cf3b7097294b2`).
 - [x] **TASK-002-16**: Test live on-chain staking (`0x442f7c79...`), dataset registration (`0x98549949...`), job escrow (`0x1bcb6db0...`), and reputation queries.
 - [x] **TASK-002-17**: Update frontend `.env.local` and `contract.ts`.

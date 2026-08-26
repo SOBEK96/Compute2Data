@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import {
   Activity,
+  AlertTriangle,
   ArrowRightLeft,
   Blocks,
   Check,
@@ -18,6 +19,7 @@ import {
   ShieldCheck,
   Sparkles,
   Wallet,
+  X,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -90,7 +92,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               GenLayer StudioNet AI Consensus Active
             </span>
             <span className="hidden items-center gap-1 text-paper/80 sm:flex">
-              <Zap className="h-3 w-3 text-cyan-400" /> Gasless Execution • 0 GEN Fee Required
+              <Zap className="h-3 w-3 text-cyan-400" /> Gasless Execution - 0 GEN Fee Required
             </span>
             <span className="hidden items-center gap-1 sm:flex">
               <Cpu className="h-3 w-3 text-cobalt-400" /> Multi-LLM Quorum: GPT-5.4 + Claude 4.6 + Gemini 3
@@ -248,8 +250,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button
                 onClick={() => setWalletModalOpen(false)}
                 className="text-muted hover:text-paper"
+                aria-label="Close"
               >
-                ✕
+                <X className="h-4 w-4" />
               </button>
             </div>
 
@@ -305,7 +308,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {error ? (
         <div className="mx-auto max-w-[1480px] px-4 pt-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3 rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-xs text-danger">
-            <span className="text-base">⚠️</span>
+            <AlertTriangle className="h-4 w-4" />
             <span>{error}</span>
           </div>
         </div>

@@ -36,17 +36,56 @@ import {
 import { useEffect, useState, type FormEvent } from "react";
 
 import {
+  appealJobVerdict,
+  buildAttestationQuote,
   isContractConfigured,
   readProvider,
   readProviderJobs,
+  readProviderReputation,
   registerDataset,
+  resolveAppeal,
   stakeProvider,
   submitExecutionProof,
   withdrawProviderStake,
   type ContractJob,
+  type ProviderReputation,
   type ProviderState,
 } from "@/lib/contract";
 import { formatGen, parseGen, shortAddress } from "@/lib/market-data";
+
+const ONE_GEN = 1_000_000_000_000_000_000n;
+
+// Maps a job lifecycle status to its badge styling.
+function statusBadgeClass(status: string) {
+  if (status === "VERIFIED" || status === "APPEAL_ACCEPTED") {
+    return "border border-mineral/30 bg-mineral/10 text-mineral";
+  }
+  if (status === "SLASHED" || status === "APPEAL_REJECTED") {
+    return "border border-danger/30 bg-danger/10 text-danger";
+  }
+  if (status === "APPEALED" || status === "INCONCLUSIVE") {
+    return "border border-cobalt-400/30 bg-cobalt-500/10 text-cobalt-200";
+  }
+  return "border border-ember/30 bg-ember/10 text-ember";
+}
+
+// Maps the deterministic enclave attestation outcome to a label and styling.
+function attestationBadge(status: string) {
+  if (status === "ENCLAVE_VERIFIED") {
+    return { label: "Enclave Verified", className: "border border-mineral/30 bg-mineral/10 text-mineral" };
+  }
+  if (status === "ENCLAVE_REJECTED") {
+    return { label: "Enclave Rejected", className: "border border-danger/30 bg-danger/10 text-danger" };
+  }
+  return { label: "Attestation Pending", className: "border border-line bg-elevated/60 text-muted" };
+}
+
+function formatDeadline(epochSeconds: bigint) {
+  if (epochSeconds === 0n) return "No deadline set";
+  const millis = Number(epochSeconds) * 1000;
+  if (!Number.isFinite(millis)) return "No deadline set";
+  return new Date(millis).toISOString().replace("T", " ").replace(".000Z", " UTC");
+}
 
 import { useWallet } from "./wallet-provider";
 
@@ -61,6 +100,17 @@ const demoProvider: ProviderState = {
   activeDatasets: 2,
 };
 
+const demoJobDefaults = {
+  verified: false,
+  slashAmount: 0n,
+  settlementAmount: 0n,
+  appealReason: "",
+  appealBond: 0n,
+  proofDeadline: 0n,
+  appealDeadline: 0n,
+  attestationMrenclave: "",
+};
+
 const demoJobs: ContractJob[] = [
   {
     jobId: "job-fraud-gnn-001",
@@ -68,10 +118,15 @@ const demoJobs: ContractJob[] = [
     provider: demoProvider.provider,
     datasetId: "finance-fraud-risk-v2",
     modelId: "graph-sage-anomaly-v3",
+    inputCommitment: "sha256:fraud-input-commitment-3a71",
     fundedAmount: 2_000_000_000_000_000_000n,
     status: "FUNDED",
+    outputCommitment: "",
+    attestationStatus: "PENDING",
     verificationReason: "NONE",
-    verificationSummary: "Awaiting execution proof submission from provider enclave.",
+    verificationSummary: "Awaiting enclave attestation submission from provider.",
+    ...demoJobDefaults,
+    proofDeadline: 1_797_000_000n,
   },
   {
     jobId: "job-oncology-c2d-04",
@@ -79,10 +134,17 @@ const demoJobs: ContractJob[] = [
     provider: demoProvider.provider,
     datasetId: "genomics-pan-cancer-v1",
     modelId: "deep-survival-coxnet-v3",
+    inputCommitment: "sha256:oncology-input-commitment-9c02",
     fundedAmount: 3_000_000_000_000_000_000n,
     status: "VERIFIED",
+    outputCommitment: "sha256:coxnet-survival-artifact-final",
+    attestationStatus: "ENCLAVE_VERIFIED",
     verificationReason: "NONE",
-    verificationSummary: "GenLayer Multi-LLM consensus verified execution proof and released 3 GEN escrow.",
+    verificationSummary:
+      "Enclave quote bound the artifact to the committed dataset, input and model; escrow released.",
+    ...demoJobDefaults,
+    verified: true,
+    settlementAmount: 3_000_000_000_000_000_000n,
   },
   {
     jobId: "job-metro-traffic-02",
@@ -90,10 +152,17 @@ const demoJobs: ContractJob[] = [
     provider: demoProvider.provider,
     datasetId: "mobility-v1",
     modelId: "routeformer-forecast-v2",
+    inputCommitment: "sha256:metro-input-commitment-77f0",
     fundedAmount: 3_500_000_000_000_000_000n,
     status: "SLASHED",
+    outputCommitment: "sha256:routeformer-artifact-unverified",
+    attestationStatus: "ENCLAVE_REJECTED",
     verificationReason: "MODEL_MISMATCH",
-    verificationSummary: "Proof named a mismatched model ID. Provider collateral was slashed and requester refunded.",
+    verificationSummary:
+      "Attestation artifact named a mismatched model ID. Provider collateral was slashed and requester refunded.",
+    ...demoJobDefaults,
+    slashAmount: 12_000_000_000_000_000_000n,
+    appealDeadline: 1_797_200_000n,
   },
 ];
 
@@ -118,23 +187,15 @@ export function ProviderConsole() {
   const [regPrice, setRegPrice] = useState("3.5");
   const [regAction, setRegAction] = useState<ActionState>({ phase: "idle" });
 
-  // Proof Submission Studio
+  // Enclave Attestation Studio
   const [selectedJob, setSelectedJob] = useState<ContractJob | null>(demoJobs[0]);
-  const [proofMetadata, setProofMetadata] = useState(
-    JSON.stringify(
-      {
-        completed_epochs: 25,
-        convergence_metric: "ROC-AUC 0.964",
-        output_hash: "sha256:gnn-embeddings-final-weights-verified",
-        environment: "Secure SGX Enclave v4",
-        status: "SUCCESS",
-      },
-      null,
-      2,
-    ),
-  );
-  const [proofCommitment, setProofCommitment] = useState("sha256:gnn-embeddings-final-weights-verified");
+  const [reputation, setReputation] = useState<ProviderReputation | null>(null);
+  const [datasetCommitment, setDatasetCommitment] = useState("sha256:credit-graph-commitment-2026-v3");
+  const [outputCommitment, setOutputCommitment] = useState("sha256:gnn-embeddings-final-weights-verified");
+  const [resultStatus, setResultStatus] = useState("COMPLETED");
+  const [tamperModel, setTamperModel] = useState(false);
   const [proofAction, setProofAction] = useState<ActionState>({ phase: "idle" });
+  const [appealAction, setAppealAction] = useState<ActionState>({ phase: "idle" });
 
   const loadOnChainData = async () => {
     if (!account || !isContractConfigured) return;
@@ -142,6 +203,8 @@ export function ProviderConsole() {
     try {
       const pData = await readProvider(account);
       setProviderState(pData);
+      const rep = await readProviderReputation(account);
+      setReputation(rep);
       const pJobs = await readProviderJobs(account);
       if (pJobs.length > 0) {
         setJobs(pJobs);
@@ -212,21 +275,74 @@ export function ProviderConsole() {
     }
   };
 
-  // Handle Proof Submission
+  // Handle Enclave Attestation Submission
   const handleSubmitProof = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedJob || !account) return connect();
-    setProofAction({ phase: "pending", message: "Submitting proof & invoking GenLayer AI consensus..." });
+    setProofAction({
+      phase: "pending",
+      message: "Building enclave quote & verifying artifact binding on-chain...",
+    });
     try {
+      const attestationQuote = await buildAttestationQuote({
+        datasetCommitment: datasetCommitment.trim(),
+        inputCommitment: selectedJob.inputCommitment,
+        // A mismatch test intentionally binds the artifact to the wrong model.
+        modelId: tamperModel ? `${selectedJob.modelId}-tampered` : selectedJob.modelId,
+        outputCommitment: outputCommitment.trim(),
+        resultStatus,
+      });
       await submitExecutionProof(account, {
         jobId: selectedJob.jobId,
-        executionProof: proofMetadata.trim(),
-        proofCommitment: proofCommitment.trim(),
+        attestationQuote,
+        outputCommitment: outputCommitment.trim(),
       });
-      setProofAction({ phase: "success", message: "Proof submitted! Multi-LLM Quorum consensus reached." });
+      setProofAction({
+        phase: "success",
+        message: "Attestation submitted. Deterministic binding verified; validator quorum reviewed the report.",
+      });
       await loadOnChainData();
     } catch (err: any) {
-      setProofAction({ phase: "error", message: err.message || "Proof submission failed" });
+      setProofAction({ phase: "error", message: err.message || "Attestation submission failed" });
+    }
+  };
+
+  // Handle Appeal of a slashed or inconclusive verdict.
+  const handleAppeal = async () => {
+    if (!selectedJob || !account) return connect();
+    setAppealAction({ phase: "pending", message: "Posting 1 GEN appeal bond with fresh enclave evidence..." });
+    try {
+      const attestationEvidence = await buildAttestationQuote({
+        datasetCommitment: datasetCommitment.trim(),
+        inputCommitment: selectedJob.inputCommitment,
+        modelId: selectedJob.modelId,
+        outputCommitment: outputCommitment.trim(),
+        resultStatus: "COMPLETED",
+      });
+      await appealJobVerdict(account, {
+        jobId: selectedJob.jobId,
+        appealJustification:
+          "Re-submitting a correctly signed enclave quote bound to the committed dataset, input and model.",
+        attestationEvidence,
+        bond: ONE_GEN,
+      });
+      setAppealAction({ phase: "success", message: "Appeal filed. Bond escrowed pending adjudication." });
+      await loadOnChainData();
+    } catch (err: any) {
+      setAppealAction({ phase: "error", message: err.message || "Appeal failed" });
+    }
+  };
+
+  // Adjudicate an appeal by re-verifying the submitted enclave evidence.
+  const handleResolveAppeal = async () => {
+    if (!selectedJob || !account) return connect();
+    setAppealAction({ phase: "pending", message: "Re-verifying enclave evidence to adjudicate the appeal..." });
+    try {
+      await resolveAppeal(account, selectedJob.jobId);
+      setAppealAction({ phase: "success", message: "Appeal adjudicated. Bond and slash settled to a terminal state." });
+      await loadOnChainData();
+    } catch (err: any) {
+      setAppealAction({ phase: "error", message: err.message || "Appeal resolution failed" });
     }
   };
 
@@ -240,7 +356,7 @@ export function ProviderConsole() {
               <ShieldCheck className="h-3.5 w-3.5" /> Provider Staking & Enclave Hub
             </span>
             {account ? (
-              <span className="font-mono text-xs text-mineral">🟢 {shortAddress(account)}</span>
+              <span className="font-mono text-xs text-mineral">Connected: {shortAddress(account)}</span>
             ) : null}
           </div>
           <h1 className="mt-2 text-3xl font-extrabold tracking-[-0.04em] text-paper sm:text-5xl">
@@ -512,7 +628,7 @@ export function ProviderConsole() {
             </h2>
           </div>
           <span className="font-mono text-xs text-muted">
-            {jobs.length} jobs indexed • AI Quorum ready
+            {jobs.length} jobs indexed - AI Quorum ready
           </span>
         </div>
 
@@ -535,22 +651,24 @@ export function ProviderConsole() {
                 >
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-mono font-bold text-paper">{job.jobId}</span>
-                    <span
-                      className={clsx(
-                        "chip-badge",
-                        job.status === "VERIFIED"
-                          ? "border border-mineral/30 bg-mineral/10 text-mineral"
-                          : job.status === "SLASHED"
-                            ? "border border-danger/30 bg-danger/10 text-danger"
-                            : "border border-ember/30 bg-ember/10 text-ember",
-                      )}
-                    >
+                    <span className={clsx("chip-badge", statusBadgeClass(job.status))}>
                       {job.status}
                     </span>
                   </div>
                   <span className="mt-2 block truncate font-mono text-[11px] text-muted">
                     Model: {job.modelId}
                   </span>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <Fingerprint className="h-3 w-3 text-cobalt-400" />
+                    <span
+                      className={clsx(
+                        "chip-badge text-[9px]",
+                        attestationBadge(job.attestationStatus).className,
+                      )}
+                    >
+                      {attestationBadge(job.attestationStatus).label}
+                    </span>
+                  </div>
                   <div className="mt-2 flex items-center justify-between border-t border-line/60 pt-2 text-[10px] text-muted">
                     <span>Escrow: {formatGen(job.fundedAmount)} GEN</span>
                     <ChevronRight className="h-3.5 w-3.5 text-muted" />
@@ -560,81 +678,128 @@ export function ProviderConsole() {
             })}
           </div>
 
-          {/* Proof Submission Editor */}
+          {/* Enclave Attestation Editor */}
           <div className="lg:col-span-2 space-y-4">
+            {selectedJob ? (
+              <div className="grid gap-3 rounded-2xl border border-line bg-canvas/60 p-4 sm:grid-cols-3">
+                <div>
+                  <span className="label-caps block text-[9px] text-muted">Lifecycle State</span>
+                  <span className={clsx("chip-badge mt-1", statusBadgeClass(selectedJob.status))}>
+                    {selectedJob.status}
+                  </span>
+                </div>
+                <div>
+                  <span className="label-caps block text-[9px] text-muted">Enclave Attestation</span>
+                  <span
+                    className={clsx(
+                      "chip-badge mt-1",
+                      attestationBadge(selectedJob.attestationStatus).className,
+                    )}
+                  >
+                    <ShieldCheck className="h-3 w-3" />
+                    {attestationBadge(selectedJob.attestationStatus).label}
+                  </span>
+                </div>
+                <div>
+                  <span className="label-caps block text-[9px] text-muted">Proof Deadline</span>
+                  <span className="mt-1 block font-mono text-[10px] text-paper/80">
+                    {formatDeadline(selectedJob.proofDeadline)}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
             <div className="flex items-center justify-between">
-              <span className="label-caps text-paper">Execution Proof Metadata (JSON)</span>
+              <span className="label-caps text-paper">Enclave Quote Binding Inputs</span>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => {
-                    setProofMetadata(
-                      JSON.stringify(
-                        {
-                          completed_epochs: 25,
-                          convergence_metric: "ROC-AUC 0.964",
-                          output_hash: "sha256:gnn-embeddings-final-weights-verified",
-                          environment: "Secure SGX Enclave v4",
-                          status: "SUCCESS",
-                        },
-                        null,
-                        2,
-                      ),
-                    );
-                    setProofCommitment("sha256:gnn-embeddings-final-weights-verified");
+                    setResultStatus("COMPLETED");
+                    setTamperModel(false);
                   }}
                   className="rounded-lg border border-line bg-canvas/60 px-2.5 py-1 font-mono text-[10px] text-mineral hover:border-mineral/50"
                 >
-                  ✓ Valid Template
+                  Valid Quote
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setProofMetadata(
-                      JSON.stringify(
-                        {
-                          completed_epochs: 5,
-                          error: "TAMPERED_MODEL_MISMATCH",
-                          output_hash: "sha256:fake-unverified-weights",
-                          status: "FAIL",
-                        },
-                        null,
-                        2,
-                      ),
-                    );
-                    setProofCommitment("sha256:fake-unverified-weights");
-                  }}
+                  onClick={() => setTamperModel(true)}
                   className="rounded-lg border border-line bg-canvas/60 px-2.5 py-1 font-mono text-[10px] text-danger hover:border-danger/50"
                 >
-                  ⚠️ Mismatch Test
+                  Model Mismatch Test
                 </button>
               </div>
             </div>
 
-            <textarea
-              value={proofMetadata}
-              onChange={(e) => setProofMetadata(e.target.value)}
-              rows={6}
-              className="field font-mono text-xs leading-relaxed"
-              required
-            />
+            <p className="rounded-xl border border-line/70 bg-elevated/40 p-3 text-[11px] leading-relaxed text-muted">
+              The contract derives the report data as
+              <span className="font-mono text-cobalt-200"> sha256(dataset || input || model || output)</span> and
+              rejects any quote whose binding, trusted measurement, or signature does not verify. No provider
+              prose is trusted.
+            </p>
 
-            <div>
-              <label className="label-caps block text-[9px] text-muted">Output Proof Commitment Hash</label>
-              <input
-                value={proofCommitment}
-                onChange={(e) => setProofCommitment(e.target.value)}
-                className="field mt-1 font-mono text-xs"
-                required
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label-caps block text-[9px] text-muted">Dataset Commitment</label>
+                <input
+                  value={datasetCommitment}
+                  onChange={(e) => setDatasetCommitment(e.target.value)}
+                  className="field mt-1 font-mono text-xs"
+                  required
+                />
+              </div>
+              <div>
+                <label className="label-caps block text-[9px] text-muted">Bound Input Commitment</label>
+                <input
+                  value={selectedJob?.inputCommitment ?? ""}
+                  readOnly
+                  className="field mt-1 font-mono text-xs opacity-70"
+                />
+              </div>
+              <div>
+                <label className="label-caps block text-[9px] text-muted">Output Artifact Commitment</label>
+                <input
+                  value={outputCommitment}
+                  onChange={(e) => setOutputCommitment(e.target.value)}
+                  className="field mt-1 font-mono text-xs"
+                  required
+                />
+              </div>
+              <div>
+                <label className="label-caps block text-[9px] text-muted">Enclave Result Status</label>
+                <select
+                  value={resultStatus}
+                  onChange={(e) => setResultStatus(e.target.value)}
+                  className="field mt-1 font-mono text-xs"
+                >
+                  <option value="COMPLETED">COMPLETED</option>
+                  <option value="PENDING">PENDING</option>
+                  <option value="FAILED">FAILED</option>
+                </select>
+              </div>
             </div>
+
+            {tamperModel ? (
+              <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
+                <ShieldAlert className="h-4 w-4" />
+                <span>
+                  Mismatch test armed: the quote will bind a tampered model id and must be slashed on chain.
+                </span>
+              </div>
+            ) : null}
 
             {selectedJob ? (
               <div className="rounded-2xl border border-line bg-canvas/60 p-4 font-mono text-xs">
                 <span className="label-caps block text-muted">Latest Validator Consensus Summary</span>
-                <p className="mt-1 text-paper/90 leading-relaxed">
-                  {selectedJob.verificationSummary || "No proof evaluated yet for this job."}
+                <p className="mt-1 leading-relaxed text-paper/90">
+                  {selectedJob.verificationSummary || "No attestation evaluated yet for this job."}
                 </p>
+                {selectedJob.attestationMrenclave ? (
+                  <p className="mt-2 truncate text-[10px] text-muted">
+                    MRENCLAVE: {selectedJob.attestationMrenclave}
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
@@ -656,12 +821,80 @@ export function ProviderConsole() {
 
             <button
               onClick={handleSubmitProof}
-              disabled={proofAction.phase === "pending"}
+              disabled={proofAction.phase === "pending" || selectedJob?.status !== "FUNDED"}
               className="button-primary w-full justify-center text-xs"
             >
               <Send className="h-4 w-4" />
-              Submit Proof to GenLayer Multi-LLM Quorum
+              Submit Enclave Attestation for On-Chain Verification
             </button>
+
+            {selectedJob &&
+            (selectedJob.status === "SLASHED" ||
+              selectedJob.status === "INCONCLUSIVE" ||
+              selectedJob.status === "APPEALED") ? (
+              <div className="space-y-3 rounded-2xl border border-cobalt-400/30 bg-cobalt-500/5 p-4">
+                <div className="flex items-center justify-between">
+                  <span className="label-caps text-cobalt-200">Dispute Resolution</span>
+                  <span className="font-mono text-[10px] text-muted">
+                    Appeal window: {formatDeadline(selectedJob.appealDeadline)}
+                  </span>
+                </div>
+                {appealAction.message ? (
+                  <div
+                    className={clsx(
+                      "flex items-center gap-2 rounded-xl p-3 text-xs",
+                      appealAction.phase === "success"
+                        ? "border border-mineral/30 bg-mineral/10 text-mineral"
+                        : appealAction.phase === "error"
+                          ? "border border-danger/30 bg-danger/10 text-danger"
+                          : "border border-cobalt-400/30 bg-cobalt-500/10 text-cobalt-200",
+                    )}
+                  >
+                    {appealAction.phase === "pending" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    <span>{appealAction.message}</span>
+                  </div>
+                ) : null}
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    onClick={handleAppeal}
+                    disabled={appealAction.phase === "pending" || selectedJob.status === "APPEALED"}
+                    className="button-secondary flex-1 justify-center text-xs"
+                  >
+                    <ShieldAlert className="h-4 w-4 text-ember" />
+                    File Appeal (1 GEN Bond)
+                  </button>
+                  <button
+                    onClick={handleResolveAppeal}
+                    disabled={appealAction.phase === "pending" || selectedJob.status !== "APPEALED"}
+                    className="button-secondary flex-1 justify-center text-xs"
+                  >
+                    <Shield className="h-4 w-4 text-cobalt-300" />
+                    Adjudicate Appeal
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {reputation ? (
+              <div className="grid grid-cols-4 gap-2 rounded-2xl border border-line bg-canvas/60 p-3 text-center font-mono text-[10px]">
+                <div>
+                  <span className="block text-muted">Score</span>
+                  <strong className="text-mineral">{reputation.reputationScore}</strong>
+                </div>
+                <div>
+                  <span className="block text-muted">Passed</span>
+                  <strong className="text-paper">{reputation.successfulJobs}</strong>
+                </div>
+                <div>
+                  <span className="block text-muted">Failed</span>
+                  <strong className="text-danger">{reputation.failedJobs}</strong>
+                </div>
+                <div>
+                  <span className="block text-muted">Appeals</span>
+                  <strong className="text-cobalt-200">{reputation.appealedJobs}</strong>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </section>

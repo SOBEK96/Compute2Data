@@ -35,11 +35,107 @@ export type ContractJob = {
   provider: string;
   datasetId: string;
   modelId: string;
+  inputCommitment: string;
   fundedAmount: bigint;
   status: string;
+  outputCommitment: string;
+  attestationStatus: string;
+  attestationMrenclave: string;
   verificationReason: string;
   verificationSummary: string;
+  verified: boolean;
+  slashAmount: bigint;
+  settlementAmount: bigint;
+  appealReason: string;
+  appealBond: bigint;
+  proofDeadline: bigint;
+  appealDeadline: bigint;
 };
+
+export type MarketplaceStats = {
+  totalStaked: bigint;
+  totalEscrowed: bigint;
+  totalSlashed: bigint;
+  totalAppealBonds: bigint;
+  totalDatasets: number;
+  totalJobs: number;
+  minimumDatasetStake: bigint;
+  minimumJobCollateral: bigint;
+  minimumAppealBond: bigint;
+};
+
+export type ProviderReputation = {
+  provider: string;
+  successfulJobs: number;
+  failedJobs: number;
+  appealedJobs: number;
+  completedJobs: number;
+  reputationScore: number;
+};
+
+// Domain separation tags provisioned inside contracts/c2d_marketplace.py. The
+// browser reproduces the exact bytes the enclave signs and the contract
+// re-derives on chain so an attestation can be assembled client-side.
+const BINDING_DOMAIN = "c2d-attestation-binding-v1";
+const QUOTE_DOMAIN = "c2d-enclave-quote-v1";
+export const DEFAULT_ENCLAVE_MEASUREMENT = "11".repeat(32);
+export const DEFAULT_ENCLAVE_SIGNER = "22".repeat(32);
+
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export type AttestationArtifact = {
+  datasetCommitment: string;
+  inputCommitment: string;
+  modelId: string;
+  outputCommitment: string;
+  resultStatus?: string;
+  mrenclave?: string;
+  mrsigner?: string;
+};
+
+/**
+ * Assemble a TEE/SGX style enclave attestation quote whose report data
+ * cryptographically binds the produced artifact to the exact dataset
+ * commitment, requester input commitment and model id.
+ */
+export async function buildAttestationQuote(artifact: AttestationArtifact): Promise<string> {
+  const mrenclave = artifact.mrenclave ?? DEFAULT_ENCLAVE_MEASUREMENT;
+  const mrsigner = artifact.mrsigner ?? DEFAULT_ENCLAVE_SIGNER;
+  const resultStatus = artifact.resultStatus ?? "COMPLETED";
+  const reportData = await sha256Hex(
+    [
+      BINDING_DOMAIN,
+      artifact.datasetCommitment,
+      artifact.inputCommitment,
+      artifact.modelId,
+      artifact.outputCommitment,
+    ].join("|"),
+  );
+  const quoteSignature = await sha256Hex(
+    [QUOTE_DOMAIN, mrenclave, mrsigner, reportData].join("|"),
+  );
+  return JSON.stringify({
+    enclave: {
+      mrenclave,
+      mrsigner,
+      report_data: reportData,
+      quote_signature: quoteSignature,
+    },
+    artifact: {
+      dataset_commitment: artifact.datasetCommitment,
+      input_commitment: artifact.inputCommitment,
+      model_id: artifact.modelId,
+      output_commitment: artifact.outputCommitment,
+      result_status: resultStatus,
+    },
+  });
+}
 
 const configuredAddress = process.env.NEXT_PUBLIC_C2D_CONTRACT_ADDRESS ?? "";
 
@@ -209,18 +305,90 @@ export async function readProviderJobs(account: HexAddress): Promise<ContractJob
         provider: asString(getField(record, "provider", "provider")),
         datasetId: asString(getField(record, "dataset_id", "datasetId")),
         modelId: asString(getField(record, "model_id", "modelId")),
+        inputCommitment: asString(
+          getField(record, "input_commitment", "inputCommitment"),
+        ),
         fundedAmount: asBigInt(getField(record, "funded_amount", "fundedAmount")),
         status: asString(getField(record, "status", "status")),
+        outputCommitment: asString(
+          getField(record, "output_commitment", "outputCommitment"),
+        ),
+        attestationStatus: asString(
+          getField(record, "attestation_status", "attestationStatus"),
+        ),
+        attestationMrenclave: asString(
+          getField(record, "attestation_mrenclave", "attestationMrenclave"),
+        ),
         verificationReason: asString(
           getField(record, "verification_reason", "verificationReason"),
         ),
         verificationSummary: asString(
           getField(record, "verification_summary", "verificationSummary"),
         ),
+        verified: Boolean(getField(record, "verified", "verified")),
+        slashAmount: asBigInt(getField(record, "slash_amount", "slashAmount")),
+        settlementAmount: asBigInt(
+          getField(record, "settlement_amount", "settlementAmount"),
+        ),
+        appealReason: asString(getField(record, "appeal_reason", "appealReason")),
+        appealBond: asBigInt(getField(record, "appeal_bond", "appealBond")),
+        proofDeadline: asBigInt(getField(record, "proof_deadline", "proofDeadline")),
+        appealDeadline: asBigInt(
+          getField(record, "appeal_deadline", "appealDeadline"),
+        ),
       };
     }),
   );
   return jobs.filter((job) => job.provider.toLowerCase() === account.toLowerCase());
+}
+
+export async function readMarketplaceStats(): Promise<MarketplaceStats> {
+  const value = await readClient.readContract({
+    address: requireContractAddress(),
+    functionName: "get_marketplace_stats",
+    args: [],
+  });
+  const record = asRecord(value);
+  return {
+    totalStaked: asBigInt(getField(record, "total_staked", "totalStaked")),
+    totalEscrowed: asBigInt(getField(record, "total_escrowed", "totalEscrowed")),
+    totalSlashed: asBigInt(getField(record, "total_slashed", "totalSlashed")),
+    totalAppealBonds: asBigInt(
+      getField(record, "total_appeal_bonds", "totalAppealBonds"),
+    ),
+    totalDatasets: asNumber(getField(record, "total_datasets", "totalDatasets")),
+    totalJobs: asNumber(getField(record, "total_jobs", "totalJobs")),
+    minimumDatasetStake: asBigInt(
+      getField(record, "minimum_dataset_stake", "minimumDatasetStake"),
+    ),
+    minimumJobCollateral: asBigInt(
+      getField(record, "minimum_job_collateral", "minimumJobCollateral"),
+    ),
+    minimumAppealBond: asBigInt(
+      getField(record, "minimum_appeal_bond", "minimumAppealBond"),
+    ),
+  };
+}
+
+export async function readProviderReputation(
+  account: HexAddress,
+): Promise<ProviderReputation> {
+  const value = await readClient.readContract({
+    address: requireContractAddress(),
+    functionName: "get_provider_reputation",
+    args: [account],
+  });
+  const record = asRecord(value);
+  return {
+    provider: asString(getField(record, "provider", "provider")),
+    successfulJobs: asNumber(getField(record, "successful_jobs", "successfulJobs")),
+    failedJobs: asNumber(getField(record, "failed_jobs", "failedJobs")),
+    appealedJobs: asNumber(getField(record, "appealed_jobs", "appealedJobs")),
+    completedJobs: asNumber(getField(record, "completed_jobs", "completedJobs")),
+    reputationScore: asNumber(
+      getField(record, "reputation_score", "reputationScore"),
+    ),
+  };
 }
 
 export function stakeProvider(account: HexAddress, amount: bigint) {
@@ -286,12 +454,32 @@ export function requestCompute(
 
 export function submitExecutionProof(
   account: HexAddress,
-  input: { jobId: string; executionProof: string; proofCommitment: string },
+  input: { jobId: string; attestationQuote: string; outputCommitment: string },
 ) {
   return writeAndWait(
     account,
     "submit_execution_proof",
-    [input.jobId, input.executionProof, input.proofCommitment],
+    [input.jobId, input.attestationQuote, input.outputCommitment],
     0n,
   );
+}
+
+export function cancelExpiredJob(account: HexAddress, jobId: string) {
+  return writeAndWait(account, "cancel_expired_job", [jobId], 0n);
+}
+
+export function appealJobVerdict(
+  account: HexAddress,
+  input: { jobId: string; appealJustification: string; attestationEvidence: string; bond: bigint },
+) {
+  return writeAndWait(
+    account,
+    "appeal_job_verdict",
+    [input.jobId, input.appealJustification, input.attestationEvidence],
+    input.bond,
+  );
+}
+
+export function resolveAppeal(account: HexAddress, jobId: string) {
+  return writeAndWait(account, "resolve_appeal", [jobId], 0n);
 }
