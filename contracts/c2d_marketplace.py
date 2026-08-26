@@ -46,6 +46,8 @@ class ComputeJob:
     collateral_amount: u256
     slash_amount: u256
     settlement_amount: u256
+    appeal_reason: str
+    appeal_bond: u256
 
 
 @gl.evm.contract_interface
@@ -64,10 +66,14 @@ class C2DMarketplace(gl.Contract):
     job_ids: DynArray[str]
     minimum_dataset_stake: u256
     minimum_job_collateral: u256
+    minimum_appeal_bond: u256
     provider_stakes: TreeMap[Address, u256]
     provider_locked_stakes: TreeMap[Address, u256]
     provider_slashed_stakes: TreeMap[Address, u256]
     provider_active_datasets: TreeMap[Address, u256]
+    provider_successful_jobs: TreeMap[Address, u256]
+    provider_failed_jobs: TreeMap[Address, u256]
+    provider_appealed_jobs: TreeMap[Address, u256]
     total_staked: u256
     total_slashed: u256
     total_escrowed: u256
@@ -75,6 +81,7 @@ class C2DMarketplace(gl.Contract):
     def __init__(self):
         self.minimum_dataset_stake = u256(10 * ONE_GEN)
         self.minimum_job_collateral = u256(2 * ONE_GEN)
+        self.minimum_appeal_bond = u256(1 * ONE_GEN)
         self.total_staked = u256(0)
         self.total_slashed = u256(0)
         self.total_escrowed = u256(0)
@@ -98,8 +105,7 @@ class C2DMarketplace(gl.Contract):
         provider = gl.message.sender_address
         total = self.provider_stakes.get(provider, u256(0))
         locked = self.provider_locked_stakes.get(provider, u256(0))
-        available = total - locked
-        if amount > available:
+        if amount > total - locked:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Withdrawal exceeds available stake")
 
         self.provider_stakes[provider] = total - amount
@@ -158,36 +164,64 @@ class C2DMarketplace(gl.Contract):
         self.dataset_ids.append(dataset_id)
 
     @gl.public.write
-    def set_dataset_active(self, dataset_id: str, active: bool) -> None:
+    def update_dataset(
+        self,
+        dataset_id: str,
+        name: str,
+        description: str,
+        schema: str,
+        access_conditions: str,
+        price_per_job: u256,
+        active: bool,
+    ) -> None:
+        if dataset_id not in self.datasets:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset does not exist")
+        if name == "":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset name is required")
+        if len(name) > 160 or len(description) > 4096 or len(schema) > 4096:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset metadata is too large")
+        if access_conditions == "" or len(access_conditions) > 4096:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Access conditions are invalid")
+        if price_per_job == u256(0):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Price must be greater than zero")
+
+        dataset = self.datasets[dataset_id]
+        if dataset.provider != gl.message.sender_address:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the provider can update this dataset")
+
+        dataset.name = name
+        dataset.description = description
+        dataset.schema = schema
+        dataset.access_conditions = access_conditions
+        dataset.price_per_job = price_per_job
+        dataset.active = active
+        self.datasets[dataset_id] = dataset
+
+    @gl.public.write
+    def remove_dataset(self, dataset_id: str) -> None:
         if dataset_id not in self.datasets:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset does not exist")
 
         dataset = self.datasets[dataset_id]
         provider = gl.message.sender_address
         if dataset.provider != provider:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the provider can change dataset status")
-        if dataset.active == active:
-            return
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the provider can remove this dataset")
+        if dataset.open_jobs > u256(0):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Cannot remove dataset with pending jobs")
 
-        locked = self.provider_locked_stakes.get(provider, u256(0))
-        active_count = self.provider_active_datasets.get(provider, u256(0))
-        if active:
-            total = self.provider_stakes.get(provider, u256(0))
-            if total - locked < self.minimum_dataset_stake:
-                raise gl.vm.UserError(f"{ERROR_EXPECTED} Available stake is below the dataset bond")
-            dataset.active = True
-            dataset.listing_bond = self.minimum_dataset_stake
-            self.provider_locked_stakes[provider] = locked + self.minimum_dataset_stake
-            self.provider_active_datasets[provider] = active_count + u256(1)
-        else:
-            if dataset.open_jobs != u256(0):
-                raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset has unresolved compute jobs")
-            dataset.active = False
-            self.provider_locked_stakes[provider] = locked - dataset.listing_bond
-            self.provider_active_datasets[provider] = active_count - u256(1)
-            dataset.listing_bond = u256(0)
+        provider_locked = self.provider_locked_stakes.get(provider, u256(0))
+        self.provider_locked_stakes[provider] = provider_locked - dataset.listing_bond
+        self.provider_active_datasets[provider] = (
+            self.provider_active_datasets.get(provider, u256(1)) - u256(1)
+        )
+        del self.datasets[dataset_id]
 
-        self.datasets[dataset_id] = dataset
+        new_ids: DynArray[str] = DynArray()
+        for idx in range(len(self.dataset_ids)):
+            item_id = self.dataset_ids[idx]
+            if item_id != dataset_id:
+                new_ids.append(item_id)
+        self.dataset_ids = new_ids
 
     @gl.public.write.payable
     def request_compute(
@@ -199,38 +233,40 @@ class C2DMarketplace(gl.Contract):
         input_commitment: str,
     ) -> None:
         if job_id == "" or dataset_id == "" or model_id == "":
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job id, dataset id, and model id are required")
-        if job_id.strip() != job_id or len(job_id) > 96 or len(model_id) > 256:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job or model id format is invalid")
-        if compute_spec == "" or len(compute_spec) > 8192:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Compute specification is invalid")
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Identifiers cannot be empty")
+        if job_id.strip() != job_id or len(job_id) > 96:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job id format is invalid")
+        if len(model_id) > 160 or len(compute_spec) > 4096:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Model or specification is too large")
         if input_commitment == "" or len(input_commitment) > 256:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Input commitment is invalid")
         if job_id in self.jobs:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job already exists")
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job id already exists")
         if dataset_id not in self.datasets:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset does not exist")
 
         dataset = self.datasets[dataset_id]
         if not dataset.active:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset is not accepting jobs")
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset is currently inactive")
         if gl.message.value != dataset.price_per_job:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Payment must match the dataset price")
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Payment must match dataset price")
 
-        provider = dataset.provider
-        provider_total = self.provider_stakes.get(provider, u256(0))
-        provider_locked = self.provider_locked_stakes.get(provider, u256(0))
+        provider_total = self.provider_stakes.get(dataset.provider, u256(0))
+        provider_locked = self.provider_locked_stakes.get(dataset.provider, u256(0))
         if provider_total - provider_locked < self.minimum_job_collateral:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Provider has insufficient job collateral")
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Provider lacks available collateral for new jobs")
 
-        self.provider_locked_stakes[provider] = provider_locked + self.minimum_job_collateral
+        self.provider_locked_stakes[dataset.provider] = (
+            provider_locked + self.minimum_job_collateral
+        )
         dataset.open_jobs = dataset.open_jobs + u256(1)
         dataset.total_jobs = dataset.total_jobs + u256(1)
         self.datasets[dataset_id] = dataset
         self.total_escrowed = self.total_escrowed + gl.message.value
+
         self.jobs[job_id] = ComputeJob(
             requester=gl.message.sender_address,
-            provider=provider,
+            provider=dataset.provider,
             dataset_id=dataset_id,
             model_id=model_id,
             compute_spec=compute_spec,
@@ -245,8 +281,36 @@ class C2DMarketplace(gl.Contract):
             collateral_amount=self.minimum_job_collateral,
             slash_amount=u256(0),
             settlement_amount=u256(0),
+            appeal_reason="",
+            appeal_bond=u256(0),
         )
         self.job_ids.append(job_id)
+
+    @gl.public.write
+    def cancel_expired_job(self, job_id: str) -> None:
+        """Allow requester to cancel a funded job and recover escrow if not completed."""
+        if job_id not in self.jobs:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job does not exist")
+
+        job = self.jobs[job_id]
+        if job.status != "FUNDED":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only active funded jobs can be cancelled")
+        if job.requester != gl.message.sender_address:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the requester can cancel this job")
+
+        dataset = self.datasets[job.dataset_id]
+        dataset.open_jobs = dataset.open_jobs - u256(1)
+        self.datasets[job.dataset_id] = dataset
+
+        provider_locked = self.provider_locked_stakes.get(job.provider, u256(0))
+        self.provider_locked_stakes[job.provider] = provider_locked - job.collateral_amount
+
+        self.total_escrowed = self.total_escrowed - job.funded_amount
+        job.status = "CANCELLED"
+        job.verification_summary = "Job cancelled by requester prior to proof intake; escrow refunded."
+        self.jobs[job_id] = job
+
+        _Recipient(job.requester).emit_transfer(value=job.funded_amount, on="finalized")
 
     @gl.public.write
     def submit_execution_proof(
@@ -415,6 +479,11 @@ Return only a JSON object with exactly these fields:
             self.provider_locked_stakes[job.provider] = provider_locked - job.collateral_amount
             self.datasets[job.dataset_id] = dataset
             self.jobs[job_id] = job
+
+            self.provider_successful_jobs[job.provider] = (
+                self.provider_successful_jobs.get(job.provider, u256(0)) + u256(1)
+            )
+
             _Recipient(job.provider).emit_transfer(value=job.funded_amount, on="finalized")
         else:
             slash_amount = job.collateral_amount + dataset.listing_bond
@@ -437,6 +506,11 @@ Return only a JSON object with exactly these fields:
             dataset.listing_bond = u256(0)
             self.datasets[job.dataset_id] = dataset
             self.jobs[job_id] = job
+
+            self.provider_failed_jobs[job.provider] = (
+                self.provider_failed_jobs.get(job.provider, u256(0)) + u256(1)
+            )
+
             _Recipient(job.requester).emit_transfer(
                 value=job.settlement_amount,
                 on="finalized",
@@ -450,28 +524,52 @@ Return only a JSON object with exactly these fields:
             "slash_amount": job.slash_amount,
         }
 
+    @gl.public.write.payable
+    def appeal_job_verdict(
+        self,
+        job_id: str,
+        appeal_justification: str,
+        attestation_evidence: str,
+    ) -> None:
+        """Allow dataset provider to post an appeal bond and dispute an INVALID/INCONCLUSIVE verdict."""
+        if job_id not in self.jobs:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job does not exist")
+        if appeal_justification.strip() == "" or len(appeal_justification) > 4096:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Appeal justification is invalid")
+        if len(attestation_evidence) > 8192:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Attestation evidence is too large")
+
+        job = self.jobs[job_id]
+        if job.status not in ("SLASHED", "INCONCLUSIVE"):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Job is not in a disputable state")
+        if job.provider != gl.message.sender_address:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the dataset provider can appeal")
+        if gl.message.value < self.minimum_appeal_bond:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Appeal bond is below the required minimum")
+
+        job.status = "APPEALED"
+        job.appeal_reason = appeal_justification.strip()
+        job.appeal_bond = gl.message.value
+        job.verification_summary = f"Dispute active: {appeal_justification.strip()[:256]}"
+        self.jobs[job_id] = job
+
+        self.provider_appealed_jobs[job.provider] = (
+            self.provider_appealed_jobs.get(job.provider, u256(0)) + u256(1)
+        )
+
+    # =========================================================================
+    # PUBLIC VIEW QUERIES
+    # =========================================================================
+
     @gl.public.view
     def get_market_config(self) -> dict:
         return {
             "minimum_dataset_stake": self.minimum_dataset_stake,
             "minimum_job_collateral": self.minimum_job_collateral,
+            "minimum_appeal_bond": self.minimum_appeal_bond,
             "total_staked": self.total_staked,
             "total_slashed": self.total_slashed,
             "total_escrowed": self.total_escrowed,
-        }
-
-    @gl.public.view
-    def get_provider(self, provider_address: str) -> dict:
-        provider = Address(provider_address)
-        total = self.provider_stakes.get(provider, u256(0))
-        locked = self.provider_locked_stakes.get(provider, u256(0))
-        return {
-            "provider": provider.as_hex,
-            "total_stake": total,
-            "locked_stake": locked,
-            "available_stake": total - locked,
-            "slashed_stake": self.provider_slashed_stakes.get(provider, u256(0)),
-            "active_datasets": self.provider_active_datasets.get(provider, u256(0)),
         }
 
     @gl.public.view
@@ -479,21 +577,24 @@ Return only a JSON object with exactly these fields:
         if dataset_id not in self.datasets:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Dataset does not exist")
 
-        dataset = self.datasets[dataset_id]
+        ds = self.datasets[dataset_id]
         return {
-            "dataset_id": dataset_id,
-            "provider": dataset.provider.as_hex,
-            "name": dataset.name,
-            "description": dataset.description,
-            "schema": dataset.schema,
-            "data_commitment": dataset.data_commitment,
-            "access_conditions": dataset.access_conditions,
-            "price_per_job": dataset.price_per_job,
-            "active": dataset.active,
-            "listing_bond": dataset.listing_bond,
-            "open_jobs": dataset.open_jobs,
-            "total_jobs": dataset.total_jobs,
+            "provider": ds.provider.as_hex,
+            "name": ds.name,
+            "description": ds.description,
+            "schema": ds.schema,
+            "data_commitment": ds.data_commitment,
+            "access_conditions": ds.access_conditions,
+            "price_per_job": ds.price_per_job,
+            "active": ds.active,
+            "listing_bond": ds.listing_bond,
+            "open_jobs": ds.open_jobs,
+            "total_jobs": ds.total_jobs,
         }
+
+    @gl.public.view
+    def list_dataset_ids(self) -> DynArray[str]:
+        return self.dataset_ids
 
     @gl.public.view
     def get_job(self, job_id: str) -> dict:
@@ -519,12 +620,63 @@ Return only a JSON object with exactly these fields:
             "collateral_amount": job.collateral_amount,
             "slash_amount": job.slash_amount,
             "settlement_amount": job.settlement_amount,
+            "appeal_reason": job.appeal_reason,
+            "appeal_bond": job.appeal_bond,
         }
-
-    @gl.public.view
-    def list_dataset_ids(self) -> DynArray[str]:
-        return self.dataset_ids
 
     @gl.public.view
     def list_job_ids(self) -> DynArray[str]:
         return self.job_ids
+
+    @gl.public.view
+    def get_provider(self, provider_address: str) -> dict:
+        provider = Address(provider_address)
+        total = self.provider_stakes.get(provider, u256(0))
+        locked = self.provider_locked_stakes.get(provider, u256(0))
+        slashed = self.provider_slashed_stakes.get(provider, u256(0))
+        active = self.provider_active_datasets.get(provider, u256(0))
+        return {
+            "provider": provider.as_hex,
+            "total_stake": total,
+            "locked_stake": locked,
+            "available_stake": total - locked if total >= locked else u256(0),
+            "slashed_stake": slashed,
+            "active_datasets": active,
+        }
+
+    @gl.public.view
+    def get_provider_reputation(self, provider_address: str) -> dict:
+        provider = Address(provider_address)
+        success = int(self.provider_successful_jobs.get(provider, u256(0)))
+        failed = int(self.provider_failed_jobs.get(provider, u256(0)))
+        appealed = int(self.provider_appealed_jobs.get(provider, u256(0)))
+        total_completed = success + failed
+
+        score = 100
+        if total_completed > 0:
+            score = int((success * 100) / total_completed)
+
+        return {
+            "provider": provider.as_hex,
+            "successful_jobs": success,
+            "failed_jobs": failed,
+            "appealed_jobs": appealed,
+            "total_completed_jobs": total_completed,
+            "reputation_score": score,
+            "active_datasets": int(self.provider_active_datasets.get(provider, u256(0))),
+            "total_stake": self.provider_stakes.get(provider, u256(0)),
+            "locked_stake": self.provider_locked_stakes.get(provider, u256(0)),
+        }
+
+    @gl.public.view
+    def get_marketplace_stats(self) -> dict:
+        return {
+            "total_staked": self.total_staked,
+            "total_slashed": self.total_slashed,
+            "total_escrowed": self.total_escrowed,
+            "total_datasets": len(self.dataset_ids),
+            "total_jobs": len(self.job_ids),
+            "minimum_dataset_stake": self.minimum_dataset_stake,
+            "minimum_job_collateral": self.minimum_job_collateral,
+            "minimum_appeal_bond": self.minimum_appeal_bond,
+        }

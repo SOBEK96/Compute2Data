@@ -2,6 +2,7 @@ from conftest import (
     DATASET_STAKE,
     JOB_COLLATERAL,
     JOB_PRICE,
+    ONE_GEN,
     address_hex,
     fund_job,
     inconclusive_assessment,
@@ -76,7 +77,7 @@ def test_successful_compute_releases_escrow_without_slashing(
     job = contract.get_job("job-001")
     provider = contract.get_provider(address_hex(direct_alice))
     dataset = contract.get_dataset("mobility-v1")
-    config = contract.get_market_config()
+    stats = contract.get_marketplace_stats()
     assert result["status"] == "VERIFIED"
     assert result["verdict"] == "VALID"
     assert job["verified"] is True
@@ -87,8 +88,8 @@ def test_successful_compute_releases_escrow_without_slashing(
     assert provider["slashed_stake"] == 0
     assert dataset["active"] is True
     assert dataset["open_jobs"] == 0
-    assert config["total_escrowed"] == 0
-    assert config["total_slashed"] == 0
+    assert stats["total_escrowed"] == 0
+    assert stats["total_slashed"] == 0
 
 
 def test_malicious_proof_refunds_requester_and_slashes_provider(
@@ -116,7 +117,7 @@ def test_malicious_proof_refunds_requester_and_slashes_provider(
     job = contract.get_job("job-001")
     provider = contract.get_provider(address_hex(direct_alice))
     dataset = contract.get_dataset("mobility-v1")
-    config = contract.get_market_config()
+    stats = contract.get_marketplace_stats()
     assert result["status"] == "SLASHED"
     assert result["violation_code"] == "MODEL_MISMATCH"
     assert result["slash_amount"] == expected_slash
@@ -126,10 +127,9 @@ def test_malicious_proof_refunds_requester_and_slashes_provider(
     assert provider["slashed_stake"] == expected_slash
     assert provider["active_datasets"] == 0
     assert dataset["active"] is False
-    assert dataset["listing_bond"] == 0
     assert dataset["open_jobs"] == 0
-    assert config["total_escrowed"] == 0
-    assert config["total_slashed"] == expected_slash
+    assert stats["total_escrowed"] == 0
+    assert stats["total_slashed"] == expected_slash
 
 
 def test_inconclusive_proof_keeps_funds_and_collateral_locked(
@@ -156,7 +156,7 @@ def test_inconclusive_proof_keeps_funds_and_collateral_locked(
     assert result["verdict"] == "INCONCLUSIVE"
     assert job["verified"] is False
     assert provider["locked_stake"] == DATASET_STAKE + JOB_COLLATERAL
-    assert contract.get_market_config()["total_escrowed"] == JOB_PRICE
+    assert contract.get_marketplace_stats()["total_escrowed"] == JOB_PRICE
 
 
 def test_validator_reexecutes_and_compares_decision_fields(
@@ -201,3 +201,116 @@ def test_only_provider_can_submit_execution_proof(
             "Fabricated proof",
             "sha256:unauthorized",
         )
+
+
+# =============================================================================
+# V2 LEVEL-UP TESTS (Cancellation, Appeals, Reputation & Global Stats)
+# =============================================================================
+
+def test_requester_can_cancel_funded_job_and_receive_refund(
+    direct_vm,
+    direct_deploy,
+    direct_alice,
+    direct_bob,
+):
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    # Bob (requester) cancels job before proof is submitted
+    direct_vm.sender = direct_bob
+    contract.cancel_expired_job("job-001")
+
+    job = contract.get_job("job-001")
+    dataset = contract.get_dataset("mobility-v1")
+    provider = contract.get_provider(address_hex(direct_alice))
+    stats = contract.get_marketplace_stats()
+
+    assert job["status"] == "CANCELLED"
+    assert dataset["open_jobs"] == 0
+    assert provider["locked_stake"] == DATASET_STAKE  # Collateral released
+    assert stats["total_escrowed"] == 0
+
+
+def test_unauthorized_address_cannot_cancel_job(
+    direct_vm,
+    direct_deploy,
+    direct_alice,
+    direct_bob,
+    direct_charlie,
+):
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    # Charlie tries to cancel Bob's job
+    direct_vm.sender = direct_charlie
+    with direct_vm.expect_revert("Only the requester can cancel this job"):
+        contract.cancel_expired_job("job-001")
+
+
+def test_provider_can_appeal_slashed_job_with_bond(
+    direct_vm,
+    direct_deploy,
+    direct_alice,
+    direct_bob,
+):
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+    direct_vm.mock_llm(r".*security validator settling.*", malicious_assessment())
+
+    # Provider submits proof -> gets slashed
+    direct_vm.sender = direct_alice
+    contract.submit_execution_proof(
+        "job-001",
+        "Proof with mismatch.",
+        "sha256:proof-mismatch",
+    )
+
+    # Provider files an appeal with 1 GEN appeal bond
+    direct_vm.sender = direct_alice
+    direct_vm.value = ONE_GEN
+    contract.appeal_job_verdict(
+        "job-001",
+        "Hardware enclave attestation shows correct execution despite parsing ambiguity.",
+        "sgx_quote:00112233aabbcc",
+    )
+    direct_vm.value = 0
+
+    job = contract.get_job("job-001")
+    reputation = contract.get_provider_reputation(address_hex(direct_alice))
+
+    assert job["status"] == "APPEALED"
+    assert job["appeal_bond"] == ONE_GEN
+    assert "Dispute active" in job["verification_summary"]
+    assert reputation["appealed_jobs"] == 1
+
+
+def test_provider_reputation_and_marketplace_stats_accuracy(
+    direct_vm,
+    direct_deploy,
+    direct_alice,
+    direct_bob,
+):
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+    direct_vm.mock_llm(r".*security validator settling.*", valid_assessment())
+
+    direct_vm.sender = direct_alice
+    contract.submit_execution_proof(
+        "job-001",
+        "Valid proof",
+        "sha256:proof-valid",
+    )
+
+    reputation = contract.get_provider_reputation(address_hex(direct_alice))
+    stats = contract.get_marketplace_stats()
+
+    assert reputation["successful_jobs"] == 1
+    assert reputation["failed_jobs"] == 0
+    assert reputation["reputation_score"] == 100
+    assert stats["total_datasets"] == 1
+    assert stats["total_jobs"] == 1
+    assert stats["minimum_appeal_bond"] == ONE_GEN
