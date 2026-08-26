@@ -1,18 +1,27 @@
 "use client";
 
+import clsx from "clsx";
 import {
+  AlertTriangle,
   ArrowRight,
   CheckCircle2,
   Cpu,
-  LoaderCircle,
-  LockKeyhole,
+  Database,
+  ExternalLink,
+  Fingerprint,
+  Info,
+  Loader2,
+  Lock,
   ShieldCheck,
+  Sparkles,
   X,
+  Zap,
 } from "lucide-react";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
-import { isContractConfigured, requestCompute } from "@/lib/contract";
+import { requestCompute } from "@/lib/contract";
 import type { MarketplaceDataset } from "@/lib/market-data";
+import { shortAddress } from "@/lib/market-data";
 
 import { useWallet } from "./wallet-provider";
 
@@ -21,232 +30,245 @@ type ComputeRequestModalProps = {
   onClose: () => void;
 };
 
-type SubmissionState =
-  | { phase: "idle" }
-  | { phase: "pending"; message: string }
-  | { phase: "success"; hash: string }
-  | { phase: "error"; message: string };
-
 export function ComputeRequestModal({ dataset, onClose }: ComputeRequestModalProps) {
-  const titleId = useId();
   const { account, connect } = useWallet();
-  const [jobId, setJobId] = useState("");
-  const [modelId, setModelId] = useState("hf://compute2data/forecast-base-v2");
+  const [modelId, setModelId] = useState("hf://deep-transformer-oncology-v4");
   const [computeSpec, setComputeSpec] = useState(
-    "Train for 12 epochs. Return aggregate evaluation metrics and an output artifact commitment.",
+    "Train Cox Proportional Hazards model with L1 penalty across 33 tumor types; output validation C-index and model weights commitment.",
   );
-  const [inputCommitment, setInputCommitment] = useState("sha256:");
-  const [submission, setSubmission] = useState<SubmissionState>({ phase: "idle" });
-
-  useEffect(() => {
-    if (!dataset) return;
-    setJobId(`job-${dataset.id}-${Date.now().toString(36)}`);
-    setSubmission({ phase: "idle" });
-  }, [dataset]);
-
-  useEffect(() => {
-    if (!dataset) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && submission.phase !== "pending") onClose();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = "";
-    };
-  }, [dataset, onClose, submission.phase]);
+  const [inputCommitment, setInputCommitment] = useState(
+    "sha256:input-hyperparams-l1-0.05-epochs25",
+  );
+  const [phase, setPhase] = useState<"idle" | "submitting" | "success" | "error">("idle");
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!dataset) return null;
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!dataset) return;
-
-    if (!isContractConfigured) {
-      setSubmission({
-        phase: "error",
-        message:
-          "Live transactions are disabled in demo mode. Configure NEXT_PUBLIC_C2D_CONTRACT_ADDRESS.",
-      });
-      return;
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!account) {
+      const connected = await connect();
+      if (!connected) return;
     }
 
-    const signer = account ?? (await connect());
-    if (!signer) return;
+    setPhase("submitting");
+    setErrorMessage(null);
 
-    setSubmission({ phase: "pending", message: "Waiting for wallet signature" });
     try {
-      const hash = await requestCompute(signer, {
-        jobId,
+      const generatedJobId = `job-${dataset.id}-${Date.now().toString(36)}`;
+      const hash = await requestCompute(account!, {
+        jobId: generatedJobId,
         datasetId: dataset.id,
-        modelId,
-        computeSpec,
-        inputCommitment,
+        modelId: modelId.trim(),
+        computeSpec: computeSpec.trim(),
+        inputCommitment: inputCommitment.trim(),
         price: dataset.priceWei,
       });
-      setSubmission({ phase: "success", hash });
-    } catch (caught) {
-      setSubmission({
-        phase: "error",
-        message: caught instanceof Error ? caught.message : "Compute request failed.",
-      });
+
+      setTxHash(hash);
+      setPhase("success");
+    } catch (err: any) {
+      console.error("Compute request error:", err);
+      setPhase("error");
+      setErrorMessage(err.message || "Failed to submit on-chain compute request.");
     }
-  }
+  };
+
+  const generateRandomHash = () => {
+    const chars = "0123456789abcdef";
+    let hash = "sha256:";
+    for (let i = 0; i < 32; i++) {
+      hash += chars[Math.floor(Math.random() * chars.length)];
+    }
+    setInputCommitment(hash);
+  };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-canvas/85 p-0 backdrop-blur-xl sm:items-center sm:p-5"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && submission.phase !== "pending") onClose();
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-canvas/85 p-4 backdrop-blur-xl animate-soft-rise"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && phase !== "submitting") onClose();
       }}
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="panel-raised max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl sm:rounded-2xl"
-      >
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-elevated/95 px-5 py-5 backdrop-blur-xl sm:px-7">
-          <div>
-            <span className="label-caps text-cobalt-300">Escrowed workload</span>
-            <h2 id={titleId} className="mt-2 text-2xl font-extrabold tracking-[-0.04em]">
-              Request private compute
-            </h2>
-            <p className="mt-2 text-sm text-muted">{dataset.name}</p>
+      <div className="panel relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl p-6 sm:p-8 shadow-2xl">
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cobalt-500 via-cyan-400 to-mineral" />
+
+        {/* Modal Header */}
+        <div className="flex items-start justify-between border-b border-line pb-5">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-xl border border-cobalt-400/40 bg-cobalt-500/10 text-cyan-300">
+              <Cpu className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-extrabold text-paper">Configure Compute Job</h2>
+                <span className="chip-badge border border-mineral/40 bg-mineral/10 text-mineral">
+                  Proof-Gated Escrow
+                </span>
+              </div>
+              <p className="font-mono text-xs text-muted">
+                Target: <strong className="text-paper">{dataset.name}</strong> ({shortAddress(dataset.provider)})
+              </p>
+            </div>
           </div>
           <button
-            type="button"
             onClick={onClose}
-            disabled={submission.phase === "pending"}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line text-muted transition hover:bg-carbon hover:text-paper disabled:opacity-40"
-            aria-label="Close compute request"
+            disabled={phase === "submitting"}
+            className="rounded-xl border border-line bg-elevated/60 p-2 text-muted hover:border-line-bright hover:text-paper disabled:opacity-50"
           >
             <X className="h-4 w-4" />
           </button>
-        </header>
+        </div>
 
-        {submission.phase === "success" ? (
-          <div className="px-5 py-14 text-center sm:px-8">
-            <span className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-mineral/30 bg-mineral/10 text-mineral">
-              <CheckCircle2 className="h-7 w-7" />
-            </span>
-            <h3 className="mt-6 text-2xl font-extrabold tracking-[-0.035em]">
-              Compute request accepted
-            </h3>
-            <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">
-              Payment is escrowed. The provider receives funds only after GenLayer
-              consensus validates its execution proof.
-            </p>
-            <div className="mx-auto mt-6 max-w-lg rounded-xl border border-line bg-canvas/70 px-4 py-3 text-left font-mono text-[10px] text-muted">
-              <span className="block uppercase tracking-[0.14em]">Transaction</span>
-              <span className="mt-2 block break-all text-paper">{submission.hash}</span>
-            </div>
-            <button type="button" onClick={onClose} className="button-primary mt-7">
-              Return to marketplace
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="grid gap-7 px-5 py-6 sm:px-7">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-xl border border-line bg-canvas/55 p-4">
-                <LockKeyhole className="h-4 w-4 text-cobalt-300" />
-                <span className="label-caps mt-3 block">Raw data</span>
-                <strong className="mt-1 block text-sm">Never transferred</strong>
-              </div>
-              <div className="rounded-xl border border-line bg-canvas/55 p-4">
-                <Cpu className="h-4 w-4 text-ember" />
-                <span className="label-caps mt-3 block">Job escrow</span>
-                <strong className="mt-1 block text-sm">{dataset.priceLabel}</strong>
-              </div>
-              <div className="rounded-xl border border-line bg-canvas/55 p-4">
-                <ShieldCheck className="h-4 w-4 text-mineral" />
-                <span className="label-caps mt-3 block">Provider bond</span>
-                <strong className="mt-1 block text-sm">{dataset.bondLabel}</strong>
-              </div>
+        {/* Success State */}
+        {phase === "success" ? (
+          <div className="space-y-6 py-8 text-center">
+            <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-mineral/40 bg-mineral/10 text-mineral shadow-glow">
+              <CheckCircle2 className="h-8 w-8" />
             </div>
 
-            <div className="grid gap-5 sm:grid-cols-2">
-              <label className="grid gap-2">
-                <span className="label-caps">Job ID</span>
-                <input
-                  className="field font-mono text-xs"
-                  value={jobId}
-                  onChange={(event) => setJobId(event.target.value)}
-                  required
-                  maxLength={96}
-                />
-              </label>
-              <label className="grid gap-2">
-                <span className="label-caps">Model ID or URI</span>
-                <input
-                  className="field font-mono text-xs"
-                  value={modelId}
-                  onChange={(event) => setModelId(event.target.value)}
-                  required
-                  maxLength={256}
-                />
-              </label>
+            <div className="space-y-2">
+              <h3 className="text-2xl font-extrabold text-paper">Compute Job Escrowed On-Chain!</h3>
+              <p className="mx-auto max-w-md text-xs leading-relaxed text-muted">
+                Your compute request has been committed on GenLayer StudioNet. Escrowed GEN is locked until the provider submits an SGX enclave execution proof and AI validators confirm validity.
+              </p>
             </div>
 
-            <label className="grid gap-2">
-              <span className="label-caps">Compute specification</span>
-              <textarea
-                className="field min-h-32 resize-y leading-6"
-                value={computeSpec}
-                onChange={(event) => setComputeSpec(event.target.value)}
-                required
-                maxLength={8192}
-              />
-              <span className="text-xs text-muted">
-                Define exact completion criteria. Validators compare the proof against this text.
-              </span>
-            </label>
-
-            <label className="grid gap-2">
-              <span className="label-caps">Input commitment</span>
-              <input
-                className="field font-mono text-xs"
-                value={inputCommitment}
-                onChange={(event) => setInputCommitment(event.target.value)}
-                required
-                maxLength={256}
-              />
-            </label>
-
-            {submission.phase === "error" ? (
-              <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
-                {submission.message}
+            {txHash ? (
+              <div className="mx-auto max-w-md rounded-2xl border border-line bg-canvas/70 p-4 font-mono text-xs">
+                <span className="label-caps block">Transaction Hash</span>
+                <span className="mt-1 block truncate text-cyan-300">{txHash}</span>
               </div>
             ) : null}
 
-            <div className="flex flex-col-reverse gap-3 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between">
-              <p className="max-w-sm text-xs leading-5 text-muted">
-                Invalid or malicious proof consensus refunds your escrow and pays the slashed collateral to your wallet.
-              </p>
+            <div className="flex justify-center gap-3 pt-4">
+              <button onClick={onClose} className="button-primary px-8">
+                Done & Return to Market
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Form Content */
+          <form onSubmit={handleSubmit} className="mt-6 space-y-6">
+            {/* Step 1: Model Identifier */}
+            <div className="space-y-2">
+              <label className="label-caps flex items-center justify-between text-xs text-paper">
+                <span>1. Model Identifier (URI or Container Hash)</span>
+                <span className="font-normal text-muted">Container / HF Model</span>
+              </label>
+              <input
+                value={modelId}
+                onChange={(e) => setModelId(e.target.value)}
+                placeholder="e.g. hf://deep-survival-coxnet-v3 or docker://enclave/model:1.0"
+                className="field font-mono text-xs"
+                required
+              />
+            </div>
+
+            {/* Step 2: Compute Specification */}
+            <div className="space-y-2">
+              <label className="label-caps flex items-center justify-between text-xs text-paper">
+                <span>2. Compute Task Specification</span>
+                <span className="font-normal text-muted">Strict execution policy</span>
+              </label>
+              <textarea
+                value={computeSpec}
+                onChange={(e) => setComputeSpec(e.target.value)}
+                rows={3}
+                placeholder="Specify execution rules, training parameters, loss targets, and required proof format..."
+                className="field text-xs"
+                required
+              />
+            </div>
+
+            {/* Step 3: Input Commitment */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="label-caps text-xs text-paper">
+                  3. Input Cryptographic Commitment
+                </label>
+                <button
+                  type="button"
+                  onClick={generateRandomHash}
+                  className="flex items-center gap-1 font-mono text-[10px] text-cyan-300 hover:underline"
+                >
+                  <Sparkles className="h-3 w-3" /> Auto-Generate Hash
+                </button>
+              </div>
+              <input
+                value={inputCommitment}
+                onChange={(e) => setInputCommitment(e.target.value)}
+                placeholder="sha256:..."
+                className="field font-mono text-xs"
+                required
+              />
+            </div>
+
+            {/* Escrow Fee Breakdown Card */}
+            <div className="rounded-2xl border border-line bg-canvas/60 p-4 space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted">Dataset Compute Price:</span>
+                <strong className="font-mono text-paper">{dataset.priceLabel}</strong>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted">Network Gas Fee (StudioNet):</span>
+                <strong className="font-mono text-mineral">0.00 GEN (Gasless)</strong>
+              </div>
+              <div className="flex items-center justify-between border-t border-line/80 pt-2 text-xs">
+                <span className="font-bold text-paper">Total Escrow Required:</span>
+                <strong className="font-mono text-base font-extrabold text-cyan-300">
+                  {dataset.priceLabel}
+                </strong>
+              </div>
+            </div>
+
+            {/* Security Guarantee Notice */}
+            <div className="flex items-start gap-3 rounded-2xl border border-cobalt-400/30 bg-cobalt-500/10 p-3.5 text-xs text-cobalt-200">
+              <ShieldCheck className="h-5 w-5 shrink-0 text-cyan-300" />
+              <div className="leading-relaxed">
+                <strong>Non-Custodial Guarantee:</strong> Your escrow is locked in the smart contract. If the provider fails to submit proof or submits an invalid output, you will receive a 100% refund.
+              </div>
+            </div>
+
+            {errorMessage ? (
+              <div className="flex items-center gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs text-danger">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            ) : null}
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={phase === "submitting"}
+                className="button-secondary text-xs"
+              >
+                Cancel
+              </button>
               <button
                 type="submit"
-                disabled={submission.phase === "pending"}
-                className="button-primary min-w-48"
+                disabled={phase === "submitting"}
+                className="button-cyan px-6 py-3 text-xs"
               >
-                {submission.phase === "pending" ? (
+                {phase === "submitting" ? (
                   <>
-                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                    {submission.message}
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Executing AI Escrow...</span>
                   </>
                 ) : (
                   <>
-                    Fund compute
-                    <ArrowRight className="h-4 w-4" />
+                    <Lock className="h-4 w-4" />
+                    <span>Confirm & Escrow {dataset.priceLabel}</span>
                   </>
                 )}
               </button>
             </div>
           </form>
         )}
-      </section>
+      </div>
     </div>
   );
 }

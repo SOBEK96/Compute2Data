@@ -1,16 +1,37 @@
 "use client";
 
+import clsx from "clsx";
 import {
+  Activity,
+  AlertOctagon,
+  AlertTriangle,
   ArrowDownToLine,
+  ArrowRight,
   ArrowUpFromLine,
+  Boxes,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
+  Cpu,
+  Database,
+  ExternalLink,
   FilePlus2,
-  LoaderCircle,
+  Fingerprint,
+  Layers,
+  Loader2,
+  Lock,
   LockKeyhole,
   Plus,
+  RefreshCw,
+  Send,
+  Shield,
   ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Wallet,
   WalletCards,
+  X,
+  Zap,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -32,382 +53,618 @@ import { useWallet } from "./wallet-provider";
 type ActionState = { phase: "idle" | "pending" | "success" | "error"; message?: string };
 
 const demoProvider: ProviderState = {
-  provider: "0x71d9f07f3c6a39e876e50f58af641a5db06c8a20",
-  totalStake: 52n * 10n ** 18n,
-  lockedStake: 24n * 10n ** 18n,
-  availableStake: 28n * 10n ** 18n,
+  provider: "0xDA5102E0fe70a609559551450B2dD1662E0746bE",
+  totalStake: 50n * 10n ** 18n,
+  lockedStake: 20n * 10n ** 18n,
+  availableStake: 30n * 10n ** 18n,
   slashedStake: 0n,
   activeDatasets: 2,
 };
 
 const demoJobs: ContractJob[] = [
   {
-    jobId: "job-metroflow-9af3",
-    requester: "0x2e8f...c601",
+    jobId: "job-fraud-gnn-001",
+    requester: "0x3673...9769",
     provider: demoProvider.provider,
-    datasetId: "mobility-v1",
-    modelId: "hf://forecast-base-v2",
-    fundedAmount: 3_200_000_000_000_000_000n,
+    datasetId: "finance-fraud-risk-v2",
+    modelId: "graph-sage-anomaly-v3",
+    fundedAmount: 2_000_000_000_000_000_000n,
     status: "FUNDED",
-    verificationReason: "",
-    verificationSummary: "Proof submission expected from the provider enclave.",
+    verificationReason: "NONE",
+    verificationSummary: "Awaiting execution proof submission from provider enclave.",
   },
   {
-    jobId: "job-metroflow-33c2",
-    requester: "0xd8aa...77e4",
+    jobId: "job-oncology-c2d-04",
+    requester: "0x89ab...12cd",
     provider: demoProvider.provider,
-    datasetId: "mobility-v1",
-    modelId: "s3://research/routeformer",
-    fundedAmount: 3_200_000_000_000_000_000n,
+    datasetId: "genomics-pan-cancer-v1",
+    modelId: "deep-survival-coxnet-v3",
+    fundedAmount: 3_000_000_000_000_000_000n,
     status: "VERIFIED",
     verificationReason: "NONE",
-    verificationSummary: "Consensus matched the committed compute request.",
+    verificationSummary: "GenLayer Multi-LLM consensus verified execution proof and released 3 GEN escrow.",
   },
   {
-    jobId: "job-notes-61de",
-    requester: "0xa883...ab09",
+    jobId: "job-metro-traffic-02",
+    requester: "0x44fa...7788",
     provider: demoProvider.provider,
-    datasetId: "clinical-notes-v3",
-    modelId: "hf://clinical-ner-7b",
-    fundedAmount: 4_600_000_000_000_000_000n,
+    datasetId: "mobility-v1",
+    modelId: "routeformer-forecast-v2",
+    fundedAmount: 3_500_000_000_000_000_000n,
     status: "SLASHED",
     verificationReason: "MODEL_MISMATCH",
-    verificationSummary: "The submitted proof named a model different from the funded request.",
+    verificationSummary: "Proof named a mismatched model ID. Provider collateral was slashed and requester refunded.",
   },
 ];
 
-function Metric({
-  label,
-  value,
-  detail,
-  tone = "paper",
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  tone?: "paper" | "mineral" | "danger" | "ember";
-}) {
-  const toneClass = {
-    paper: "text-paper",
-    mineral: "text-mineral",
-    danger: "text-danger",
-    ember: "text-ember",
-  }[tone];
-  return (
-    <div className="panel rounded-2xl p-5">
-      <span className="label-caps">{label}</span>
-      <strong className={`mt-5 block text-2xl font-extrabold tracking-[-0.04em] ${toneClass}`}>
-        {value}
-      </strong>
-      <span className="mt-2 block text-xs text-muted">{detail}</span>
-    </div>
-  );
-}
-
 export function ProviderConsole() {
   const { account, connect } = useWallet();
-  const [provider, setProvider] = useState<ProviderState>(demoProvider);
+  const [providerState, setProviderState] = useState<ProviderState>(demoProvider);
   const [jobs, setJobs] = useState<ContractJob[]>(demoJobs);
-  const [stakeAmount, setStakeAmount] = useState("10");
-  const [withdrawAmount, setWithdrawAmount] = useState("5");
-  const [proofJob, setProofJob] = useState<ContractJob | null>(null);
-  const [action, setAction] = useState<ActionState>({ phase: "idle" });
-  const [showRegister, setShowRegister] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Staking & Dataset forms
+  const [stakeInput, setStakeInput] = useState("25");
+  const [withdrawInput, setWithdrawInput] = useState("10");
+  const [stakeAction, setStakeAction] = useState<ActionState>({ phase: "idle" });
+
+  // Register Dataset Form State
+  const [regId, setRegId] = useState("finance-credit-risk-v3");
+  const [regName, setRegName] = useState("Global Institutional Default Graph");
+  const [regDesc, setRegDesc] = useState("High-frequency syndicated loan performance and counterparty risk vectors.");
+  const [regSchema, setRegSchema] = useState("borrower_id, debt_to_ebitda, credit_spread, default_status");
+  const [regCommit, setRegCommit] = useState("sha256:credit-graph-commitment-2026-v3");
+  const [regAccess, setRegAccess] = useState("Approved non-custodial risk classification models only.");
+  const [regPrice, setRegPrice] = useState("3.5");
+  const [regAction, setRegAction] = useState<ActionState>({ phase: "idle" });
+
+  // Proof Submission Studio
+  const [selectedJob, setSelectedJob] = useState<ContractJob | null>(demoJobs[0]);
+  const [proofMetadata, setProofMetadata] = useState(
+    JSON.stringify(
+      {
+        completed_epochs: 25,
+        convergence_metric: "ROC-AUC 0.964",
+        output_hash: "sha256:gnn-embeddings-final-weights-verified",
+        environment: "Secure SGX Enclave v4",
+        status: "SUCCESS",
+      },
+      null,
+      2,
+    ),
+  );
+  const [proofCommitment, setProofCommitment] = useState("sha256:gnn-embeddings-final-weights-verified");
+  const [proofAction, setProofAction] = useState<ActionState>({ phase: "idle" });
+
+  const loadOnChainData = async () => {
+    if (!account || !isContractConfigured) return;
+    setLoading(true);
+    try {
+      const pData = await readProvider(account);
+      setProviderState(pData);
+      const pJobs = await readProviderJobs(account);
+      if (pJobs.length > 0) {
+        setJobs(pJobs);
+        setSelectedJob(pJobs[0]);
+      }
+    } catch (err) {
+      console.warn("Failed reading on-chain provider data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (!account || !isContractConfigured) return;
-    let active = true;
-    Promise.all([readProvider(account), readProviderJobs(account)])
-      .then(([nextProvider, nextJobs]) => {
-        if (!active) return;
-        setProvider(nextProvider);
-        setJobs(nextJobs);
-      })
-      .catch((caught) => {
-        if (active) {
-          setAction({
-            phase: "error",
-            message: caught instanceof Error ? caught.message : "Provider data could not load.",
-          });
-        }
-      });
-    return () => {
-      active = false;
-    };
+    if (account) {
+      loadOnChainData();
+    }
   }, [account]);
 
-  async function runAction(actionFn: (signer: `0x${string}`) => Promise<string>) {
-    if (!isContractConfigured) {
-      setAction({
-        phase: "error",
-        message: "Live transactions are disabled in demo mode. Configure the contract address.",
-      });
-      return;
-    }
-    const signer = account ?? (await connect());
-    if (!signer) return;
-    setAction({ phase: "pending", message: "Waiting for network confirmation" });
+  // Handle Stake Action
+  const handleStake = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!account) return connect();
+    setStakeAction({ phase: "pending", message: "Staking GEN collateral on-chain..." });
     try {
-      const hash = await actionFn(signer);
-      setAction({ phase: "success", message: `Accepted ${shortAddress(hash)}` });
-      const [nextProvider, nextJobs] = await Promise.all([
-        readProvider(signer),
-        readProviderJobs(signer),
-      ]);
-      setProvider(nextProvider);
-      setJobs(nextJobs);
-    } catch (caught) {
-      setAction({
-        phase: "error",
-        message: caught instanceof Error ? caught.message : "Transaction failed.",
-      });
+      const amount = parseGen(stakeInput);
+      await stakeProvider(account, amount);
+      setStakeAction({ phase: "success", message: `Successfully staked ${stakeInput} GEN!` });
+      await loadOnChainData();
+    } catch (err: any) {
+      setStakeAction({ phase: "error", message: err.message || "Staking failed" });
     }
-  }
+  };
+
+  // Handle Withdraw Stake
+  const handleWithdraw = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!account) return connect();
+    setStakeAction({ phase: "pending", message: "Withdrawing available collateral..." });
+    try {
+      const amount = parseGen(withdrawInput);
+      await withdrawProviderStake(account, amount);
+      setStakeAction({ phase: "success", message: `Withdrew ${withdrawInput} GEN!` });
+      await loadOnChainData();
+    } catch (err: any) {
+      setStakeAction({ phase: "error", message: err.message || "Withdrawal failed" });
+    }
+  };
+
+  // Handle Register Dataset
+  const handleRegisterDataset = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!account) return connect();
+    setRegAction({ phase: "pending", message: "Locking bond & registering dataset on-chain..." });
+    try {
+      await registerDataset(account, {
+        datasetId: regId.trim(),
+        name: regName.trim(),
+        description: regDesc.trim(),
+        schema: regSchema.trim(),
+        dataCommitment: regCommit.trim(),
+        accessConditions: regAccess.trim(),
+        pricePerJob: parseGen(regPrice),
+      });
+      setRegAction({ phase: "success", message: `Dataset "${regName}" registered and bonded!` });
+      await loadOnChainData();
+    } catch (err: any) {
+      setRegAction({ phase: "error", message: err.message || "Dataset registration failed" });
+    }
+  };
+
+  // Handle Proof Submission
+  const handleSubmitProof = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedJob || !account) return connect();
+    setProofAction({ phase: "pending", message: "Submitting proof & invoking GenLayer AI consensus..." });
+    try {
+      await submitExecutionProof(account, {
+        jobId: selectedJob.jobId,
+        executionProof: proofMetadata.trim(),
+        proofCommitment: proofCommitment.trim(),
+      });
+      setProofAction({ phase: "success", message: "Proof submitted! Multi-LLM Quorum consensus reached." });
+      await loadOnChainData();
+    } catch (err: any) {
+      setProofAction({ phase: "error", message: err.message || "Proof submission failed" });
+    }
+  };
 
   return (
-    <main className="mx-auto max-w-[1480px] px-4 pb-10 pt-10 sm:px-6 sm:pt-14 lg:px-8">
-      <div className="flex flex-col justify-between gap-6 border-b border-line pb-8 lg:flex-row lg:items-end">
+    <main className="mx-auto max-w-[1480px] space-y-12 px-4 py-12 sm:px-6 lg:px-8">
+      {/* Header */}
+      <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
         <div>
-          <div className="flex items-center gap-3">
-            <span className="label-caps text-mineral">Provider console</span>
-            <span className="rounded-full border border-mineral/30 bg-mineral/10 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-mineral">
-              Bonded operator
+          <div className="flex items-center gap-2">
+            <span className="chip-badge border border-cobalt-400/40 bg-cobalt-500/10 text-cyan-300">
+              <ShieldCheck className="h-3.5 w-3.5" /> Provider Staking & Enclave Hub
             </span>
+            {account ? (
+              <span className="font-mono text-xs text-mineral">🟢 {shortAddress(account)}</span>
+            ) : null}
           </div>
-          <h1 className="mt-3 text-4xl font-extrabold tracking-[-0.05em] sm:text-5xl">
-            Operate your data surfaces.
+          <h1 className="mt-2 text-3xl font-extrabold tracking-[-0.04em] text-paper sm:text-5xl">
+            Provider Console
           </h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-            Manage collateral, publish private datasets, and answer funded workloads with proof metadata. Raw data never touches this dashboard or the contract.
+          <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted sm:text-sm">
+            Stake GEN collateral to bond datasets, manage privacy-preserving compute requests, and submit cryptographic execution proofs to GenLayer&apos;s AI validator quorum.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
-          <button type="button" onClick={() => setShowRegister(true)} className="button-secondary">
-            <FilePlus2 className="h-4 w-4" />
-            Register dataset
-          </button>
-          <button type="button" onClick={() => setProofJob(jobs.find((job) => job.status === "FUNDED") ?? null)} className="button-primary">
-            <Plus className="h-4 w-4" />
-            Submit proof
-          </button>
+
+        <button
+          onClick={loadOnChainData}
+          disabled={loading}
+          className="button-secondary self-start text-xs md:self-auto"
+        >
+          <RefreshCw className={clsx("h-4 w-4", loading && "animate-spin text-cyan-400")} />
+          Sync On-Chain State
+        </button>
+      </div>
+
+      {/* Stake & Collateral Overview Cards */}
+      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="stat-card">
+          <div className="flex items-center justify-between text-muted">
+            <span className="label-caps">Total Collateral</span>
+            <Wallet className="h-4 w-4 text-cobalt-400" />
+          </div>
+          <strong className="mt-2 block font-mono text-2xl font-extrabold text-paper">
+            {formatGen(providerState.totalStake)} GEN
+          </strong>
+          <span className="mt-1 block font-mono text-[11px] text-muted">Total deposited stake</span>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center justify-between text-muted">
+            <span className="label-caps">Locked in Bonds</span>
+            <Lock className="h-4 w-4 text-ember" />
+          </div>
+          <strong className="mt-2 block font-mono text-2xl font-extrabold text-ember">
+            {formatGen(providerState.lockedStake)} GEN
+          </strong>
+          <span className="mt-1 block font-mono text-[11px] text-muted">Backing {providerState.activeDatasets} active listings</span>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center justify-between text-muted">
+            <span className="label-caps">Available Stake</span>
+            <CheckCircle2 className="h-4 w-4 text-mineral" />
+          </div>
+          <strong className="mt-2 block font-mono text-2xl font-extrabold text-mineral">
+            {formatGen(providerState.availableStake)} GEN
+          </strong>
+          <span className="mt-1 block font-mono text-[11px] text-muted">Ready for new dataset bonds</span>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center justify-between text-muted">
+            <span className="label-caps">Slashed Collateral</span>
+            <AlertOctagon className="h-4 w-4 text-danger" />
+          </div>
+          <strong className="mt-2 block font-mono text-2xl font-extrabold text-danger">
+            {formatGen(providerState.slashedStake)} GEN
+          </strong>
+          <span className="mt-1 block font-mono text-[11px] text-muted">Zero slashing penalty</span>
         </div>
       </div>
 
-      <div className="grid gap-4 py-7 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Total stake" value={formatGen(provider.totalStake)} detail="Provider collateral" />
-        <Metric label="Locked collateral" value={formatGen(provider.lockedStake)} detail={`${provider.activeDatasets} active listings`} tone="mineral" />
-        <Metric label="Available stake" value={formatGen(provider.availableStake)} detail="Can back new listings" tone="ember" />
-        <Metric label="Slashed to date" value={formatGen(provider.slashedStake)} detail="Consensus-enforced loss" tone={provider.slashedStake ? "danger" : "paper"} />
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="panel overflow-hidden rounded-2xl">
-          <div className="flex flex-col justify-between gap-4 border-b border-line px-5 py-5 sm:flex-row sm:items-center">
-            <div>
-              <span className="label-caps">Workload queue</span>
-              <h2 className="mt-2 text-xl font-extrabold tracking-[-0.035em]">Proof obligations</h2>
+      {/* Main Grid: Staking Management & Dataset Registration */}
+      <div className="grid gap-8 lg:grid-cols-2">
+        {/* Stake / Withdraw Box */}
+        <div className="panel rounded-3xl p-6 sm:p-8">
+          <div className="flex items-center justify-between border-b border-line pb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="grid h-9 w-9 place-items-center rounded-xl bg-cobalt-500/10 text-cyan-300">
+                <WalletCards className="h-5 w-5" />
+              </div>
+              <h2 className="text-lg font-bold text-paper">Collateral Management</h2>
             </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
-              {jobs.length} indexed jobs
+            <span className="font-mono text-xs text-muted">Minimum Listing Bond: 10 GEN</span>
+          </div>
+
+          <div className="mt-6 space-y-6">
+            {/* Deposit Form */}
+            <form onSubmit={handleStake} className="space-y-3">
+              <label className="label-caps block text-paper">Stake GEN Collateral</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={stakeInput}
+                  onChange={(e) => setStakeInput(e.target.value)}
+                  className="field font-mono text-sm"
+                  placeholder="Amount in GEN"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={stakeAction.phase === "pending"}
+                  className="button-primary shrink-0 px-5 text-xs"
+                >
+                  <ArrowDownToLine className="h-4 w-4" />
+                  Stake Collateral
+                </button>
+              </div>
+              <div className="flex gap-2 font-mono text-[11px]">
+                {["10", "25", "50", "100"].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setStakeInput(v)}
+                    className="rounded-lg border border-line bg-elevated/60 px-2.5 py-1 text-muted hover:border-line-bright hover:text-paper"
+                  >
+                    +{v} GEN
+                  </button>
+                ))}
+              </div>
+            </form>
+
+            {/* Withdraw Form */}
+            <form onSubmit={handleWithdraw} className="border-t border-line/80 pt-6 space-y-3">
+              <label className="label-caps block text-paper">Withdraw Available Collateral</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={withdrawInput}
+                  onChange={(e) => setWithdrawInput(e.target.value)}
+                  className="field font-mono text-sm"
+                  placeholder="Amount in GEN"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={stakeAction.phase === "pending"}
+                  className="button-secondary shrink-0 px-5 text-xs"
+                >
+                  <ArrowUpFromLine className="h-4 w-4 text-ember" />
+                  Withdraw
+                </button>
+              </div>
+            </form>
+
+            {stakeAction.message ? (
+              <div
+                className={clsx(
+                  "flex items-center gap-2 rounded-xl p-3 text-xs",
+                  stakeAction.phase === "success"
+                    ? "border border-mineral/30 bg-mineral/10 text-mineral"
+                    : stakeAction.phase === "error"
+                      ? "border border-danger/30 bg-danger/10 text-danger"
+                      : "border border-cobalt-400/30 bg-cobalt-500/10 text-cobalt-200",
+                )}
+              >
+                {stakeAction.phase === "pending" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <span>{stakeAction.message}</span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Register Dataset Surface */}
+        <div className="panel rounded-3xl p-6 sm:p-8">
+          <div className="flex items-center justify-between border-b border-line pb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="grid h-9 w-9 place-items-center rounded-xl bg-mineral/10 text-mineral">
+                <FilePlus2 className="h-5 w-5" />
+              </div>
+              <h2 className="text-lg font-bold text-paper">Register Data Surface</h2>
+            </div>
+            <span className="chip-badge border border-mineral/40 bg-mineral/10 text-mineral">
+              10 GEN Bond Locked
             </span>
           </div>
-          <div className="divide-y divide-line">
+
+          <form onSubmit={handleRegisterDataset} className="mt-6 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label-caps block text-[9px] text-muted">Dataset Identifier</label>
+                <input
+                  value={regId}
+                  onChange={(e) => setRegId(e.target.value)}
+                  className="field mt-1 font-mono text-xs"
+                  placeholder="e.g. credit-risk-v1"
+                  required
+                />
+              </div>
+              <div>
+                <label className="label-caps block text-[9px] text-muted">Compute Fee (GEN)</label>
+                <input
+                  value={regPrice}
+                  onChange={(e) => setRegPrice(e.target.value)}
+                  className="field mt-1 font-mono text-xs"
+                  placeholder="e.g. 3.0"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label-caps block text-[9px] text-muted">Dataset Title</label>
+              <input
+                value={regName}
+                onChange={(e) => setRegName(e.target.value)}
+                className="field mt-1 text-xs"
+                placeholder="e.g. TCGA Pan-Cancer Clinical Cohort"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="label-caps block text-[9px] text-muted">Schema / Columns</label>
+              <input
+                value={regSchema}
+                onChange={(e) => setRegSchema(e.target.value)}
+                className="field mt-1 font-mono text-xs"
+                placeholder="column1, column2, label"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="label-caps block text-[9px] text-muted">Cryptographic Commitment</label>
+              <input
+                value={regCommit}
+                onChange={(e) => setRegCommit(e.target.value)}
+                className="field mt-1 font-mono text-xs"
+                placeholder="sha256:..."
+                required
+              />
+            </div>
+
+            {regAction.message ? (
+              <div
+                className={clsx(
+                  "flex items-center gap-2 rounded-xl p-3 text-xs",
+                  regAction.phase === "success"
+                    ? "border border-mineral/30 bg-mineral/10 text-mineral"
+                    : regAction.phase === "error"
+                      ? "border border-danger/30 bg-danger/10 text-danger"
+                      : "border border-cobalt-400/30 bg-cobalt-500/10 text-cobalt-200",
+                )}
+              >
+                {regAction.phase === "pending" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <span>{regAction.message}</span>
+              </div>
+            ) : null}
+
+            <button
+              type="submit"
+              disabled={regAction.phase === "pending"}
+              className="button-cyan w-full justify-center text-xs"
+            >
+              <Plus className="h-4 w-4" />
+              Bond & Register Dataset On-Chain
+            </button>
+          </form>
+        </div>
+      </div>
+
+      {/* Proof Execution & Multi-LLM Consensus Studio */}
+      <section className="panel rounded-3xl p-6 sm:p-8">
+        <div className="flex flex-col gap-3 border-b border-line pb-5 md:flex-row md:items-center md:justify-between">
+          <div>
+            <span className="label-caps text-cyan-300">Enclave Settlement Studio</span>
+            <h2 className="mt-1 text-2xl font-extrabold text-paper">
+              Active Compute Jobs & Proof Submissions
+            </h2>
+          </div>
+          <span className="font-mono text-xs text-muted">
+            {jobs.length} jobs indexed • AI Quorum ready
+          </span>
+        </div>
+
+        <div className="mt-8 grid gap-8 lg:grid-cols-3">
+          {/* Jobs List */}
+          <div className="space-y-3">
+            <span className="label-caps block text-paper">Select Target Job</span>
             {jobs.map((job) => {
-              const pending = job.status === "FUNDED";
-              const slashed = job.status === "SLASHED";
+              const active = selectedJob?.jobId === job.jobId;
               return (
-                <div key={job.jobId} className="grid gap-4 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_150px_130px] sm:items-center">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate font-mono text-xs text-paper">{job.jobId}</span>
-                      <span className={`rounded-full px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] ${pending ? "bg-ember/10 text-ember" : slashed ? "bg-danger/10 text-danger" : "bg-mineral/10 text-mineral"}`}>
-                        {job.status}
-                      </span>
-                    </div>
-                    <p className="mt-2 truncate text-sm text-muted">{job.modelId}</p>
-                    <p className="mt-1 font-mono text-[10px] text-muted/70">Requester {job.requester}</p>
+                <div
+                  key={job.jobId}
+                  onClick={() => setSelectedJob(job)}
+                  className={clsx(
+                    "cursor-pointer rounded-2xl border p-4 transition-all duration-200",
+                    active
+                      ? "border-cobalt-400 bg-elevated shadow-card"
+                      : "border-line bg-canvas/60 hover:border-line-bright hover:bg-elevated/40",
+                  )}
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono font-bold text-paper">{job.jobId}</span>
+                    <span
+                      className={clsx(
+                        "chip-badge",
+                        job.status === "VERIFIED"
+                          ? "border border-mineral/30 bg-mineral/10 text-mineral"
+                          : job.status === "SLASHED"
+                            ? "border border-danger/30 bg-danger/10 text-danger"
+                            : "border border-ember/30 bg-ember/10 text-ember",
+                      )}
+                    >
+                      {job.status}
+                    </span>
                   </div>
-                  <div className="sm:text-right">
-                    <span className="label-caps block">Escrow</span>
-                    <strong className="mt-1 block text-sm text-paper">{formatGen(job.fundedAmount)}</strong>
-                  </div>
-                  <div className="sm:text-right">
-                    {pending ? (
-                      <button type="button" onClick={() => setProofJob(job)} className="button-primary w-full py-2.5 text-xs sm:w-auto">
-                        Answer proof
-                      </button>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
-                        {slashed ? <ShieldAlert className="h-3.5 w-3.5 text-danger" /> : <CheckCircle2 className="h-3.5 w-3.5 text-mineral" />}
-                        {slashed ? job.verificationReason : "Consensus matched"}
-                      </span>
-                    )}
+                  <span className="mt-2 block truncate font-mono text-[11px] text-muted">
+                    Model: {job.modelId}
+                  </span>
+                  <div className="mt-2 flex items-center justify-between border-t border-line/60 pt-2 text-[10px] text-muted">
+                    <span>Escrow: {formatGen(job.fundedAmount)} GEN</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted" />
                   </div>
                 </div>
               );
             })}
           </div>
-        </section>
 
-        <aside className="grid content-start gap-5">
-          <StakePanel
-            stakeAmount={stakeAmount}
-            setStakeAmount={setStakeAmount}
-            withdrawAmount={withdrawAmount}
-            setWithdrawAmount={setWithdrawAmount}
-            onStake={() => runAction((signer) => stakeProvider(signer, parseGen(stakeAmount)))}
-            onWithdraw={() => runAction((signer) => withdrawProviderStake(signer, parseGen(withdrawAmount)))}
-          />
-          <div className="panel rounded-2xl p-5">
-            <div className="flex items-center gap-3">
-              <span className="grid h-9 w-9 place-items-center rounded-lg bg-cobalt-500/10 text-cobalt-300"><WalletCards className="h-4 w-4" /></span>
-              <div>
-                <span className="label-caps">Settlement status</span>
-                <strong className="mt-1 block text-sm">{isContractConfigured ? "Live contract" : "Demo workspace"}</strong>
+          {/* Proof Submission Editor */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="label-caps text-paper">Execution Proof Metadata (JSON)</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProofMetadata(
+                      JSON.stringify(
+                        {
+                          completed_epochs: 25,
+                          convergence_metric: "ROC-AUC 0.964",
+                          output_hash: "sha256:gnn-embeddings-final-weights-verified",
+                          environment: "Secure SGX Enclave v4",
+                          status: "SUCCESS",
+                        },
+                        null,
+                        2,
+                      ),
+                    );
+                    setProofCommitment("sha256:gnn-embeddings-final-weights-verified");
+                  }}
+                  className="rounded-lg border border-line bg-canvas/60 px-2.5 py-1 font-mono text-[10px] text-mineral hover:border-mineral/50"
+                >
+                  ✓ Valid Template
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProofMetadata(
+                      JSON.stringify(
+                        {
+                          completed_epochs: 5,
+                          error: "TAMPERED_MODEL_MISMATCH",
+                          output_hash: "sha256:fake-unverified-weights",
+                          status: "FAIL",
+                        },
+                        null,
+                        2,
+                      ),
+                    );
+                    setProofCommitment("sha256:fake-unverified-weights");
+                  }}
+                  className="rounded-lg border border-line bg-canvas/60 px-2.5 py-1 font-mono text-[10px] text-danger hover:border-danger/50"
+                >
+                  ⚠️ Mismatch Test
+                </button>
               </div>
             </div>
-            <p className="mt-4 text-xs leading-5 text-muted">
-              Every active listing locks a 10 GEN bond. Each funded workload locks an additional 2 GEN execution collateral.
-            </p>
+
+            <textarea
+              value={proofMetadata}
+              onChange={(e) => setProofMetadata(e.target.value)}
+              rows={6}
+              className="field font-mono text-xs leading-relaxed"
+              required
+            />
+
+            <div>
+              <label className="label-caps block text-[9px] text-muted">Output Proof Commitment Hash</label>
+              <input
+                value={proofCommitment}
+                onChange={(e) => setProofCommitment(e.target.value)}
+                className="field mt-1 font-mono text-xs"
+                required
+              />
+            </div>
+
+            {selectedJob ? (
+              <div className="rounded-2xl border border-line bg-canvas/60 p-4 font-mono text-xs">
+                <span className="label-caps block text-muted">Latest Validator Consensus Summary</span>
+                <p className="mt-1 text-paper/90 leading-relaxed">
+                  {selectedJob.verificationSummary || "No proof evaluated yet for this job."}
+                </p>
+              </div>
+            ) : null}
+
+            {proofAction.message ? (
+              <div
+                className={clsx(
+                  "flex items-center gap-2 rounded-xl p-3 text-xs",
+                  proofAction.phase === "success"
+                    ? "border border-mineral/30 bg-mineral/10 text-mineral"
+                    : proofAction.phase === "error"
+                      ? "border border-danger/30 bg-danger/10 text-danger"
+                      : "border border-cobalt-400/30 bg-cobalt-500/10 text-cobalt-200",
+                )}
+              >
+                {proofAction.phase === "pending" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <span>{proofAction.message}</span>
+              </div>
+            ) : null}
+
+            <button
+              onClick={handleSubmitProof}
+              disabled={proofAction.phase === "pending"}
+              className="button-primary w-full justify-center text-xs"
+            >
+              <Send className="h-4 w-4" />
+              Submit Proof to GenLayer Multi-LLM Quorum
+            </button>
           </div>
-        </aside>
-      </div>
-
-      {action.phase !== "idle" ? (
-        <div className={`fixed bottom-5 right-5 z-50 flex max-w-sm items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-panel ${action.phase === "error" ? "border-danger/30 bg-danger/10 text-danger" : action.phase === "success" ? "border-mineral/30 bg-mineral/10 text-mineral" : "border-cobalt-400/30 bg-cobalt-500/10 text-cobalt-300"}`}>
-          {action.phase === "pending" ? <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /> : action.phase === "error" ? <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
-          <span>{action.message}</span>
         </div>
-      ) : null}
-
-      <ProofModal job={proofJob} onClose={() => setProofJob(null)} onSubmit={(input) => runAction((signer) => submitExecutionProof(signer, input))} />
-      <RegisterModal open={showRegister} onClose={() => setShowRegister(false)} onSubmit={(input) => runAction((signer) => registerDataset(signer, input))} />
+      </section>
     </main>
-  );
-}
-
-function StakePanel({
-  stakeAmount,
-  setStakeAmount,
-  withdrawAmount,
-  setWithdrawAmount,
-  onStake,
-  onWithdraw,
-}: {
-  stakeAmount: string;
-  setStakeAmount: (value: string) => void;
-  withdrawAmount: string;
-  setWithdrawAmount: (value: string) => void;
-  onStake: () => void;
-  onWithdraw: () => void;
-}) {
-  return (
-    <section className="panel rounded-2xl p-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <span className="label-caps">Collateral controls</span>
-          <h2 className="mt-2 text-xl font-extrabold tracking-[-0.035em]">Stake manager</h2>
-        </div>
-        <LockKeyhole className="h-5 w-5 text-mineral" />
-      </div>
-      <div className="mt-6 grid gap-4">
-        <label className="grid gap-2">
-          <span className="label-caps">Add GEN</span>
-          <div className="flex gap-2">
-            <input className="field" value={stakeAmount} onChange={(event) => setStakeAmount(event.target.value)} inputMode="decimal" />
-            <button type="button" onClick={onStake} className="button-primary px-3" aria-label="Add provider stake" title="Add provider stake"><ArrowUpFromLine className="h-4 w-4" /></button>
-          </div>
-        </label>
-        <label className="grid gap-2">
-          <span className="label-caps">Release available</span>
-          <div className="flex gap-2">
-            <input className="field" value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} inputMode="decimal" />
-            <button type="button" onClick={onWithdraw} className="button-secondary px-3" aria-label="Release provider stake" title="Release provider stake"><ArrowDownToLine className="h-4 w-4" /></button>
-          </div>
-        </label>
-      </div>
-      <p className="mt-5 border-t border-line pt-4 text-xs leading-5 text-muted">
-        Locked GEN cannot be withdrawn while a dataset is active or a compute proof is unresolved.
-      </p>
-    </section>
-  );
-}
-
-function ProofModal({
-  job,
-  onClose,
-  onSubmit,
-}: {
-  job: ContractJob | null;
-  onClose: () => void;
-  onSubmit: (input: { jobId: string; executionProof: string; proofCommitment: string }) => void;
-}) {
-  const [proof, setProof] = useState("");
-  const [commitment, setCommitment] = useState("sha256:");
-  useEffect(() => {
-    if (job) {
-      setProof("");
-      setCommitment("sha256:");
-    }
-  }, [job]);
-  if (!job) return null;
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    onSubmit({ jobId: job.jobId, executionProof: proof, proofCommitment: commitment });
-    onClose();
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-canvas/85 p-0 backdrop-blur-xl sm:items-center sm:p-5">
-      <form onSubmit={submit} className="panel-raised w-full max-w-xl rounded-t-2xl p-5 sm:rounded-2xl sm:p-7">
-        <span className="label-caps text-ember">Execution proof</span>
-        <h2 className="mt-2 text-2xl font-extrabold tracking-[-0.04em]">Answer {job.jobId}</h2>
-        <p className="mt-3 text-sm leading-6 text-muted">Validators compare these claims against the original request. Include commitments and aggregate metrics, never raw records.</p>
-        <label className="mt-6 grid gap-2"><span className="label-caps">Proof metadata</span><textarea className="field min-h-36 resize-y leading-6" value={proof} onChange={(event) => setProof(event.target.value)} required maxLength={16384} placeholder="Completed job ...; dataset ...; model ...; input ...; output ...; metrics ..." /></label>
-        <label className="mt-5 grid gap-2"><span className="label-caps">Proof commitment</span><input className="field font-mono text-xs" value={commitment} onChange={(event) => setCommitment(event.target.value)} required maxLength={256} /></label>
-        <div className="mt-7 flex justify-end gap-3"><button type="button" onClick={onClose} className="button-secondary">Cancel</button><button type="submit" className="button-primary">Submit to consensus</button></div>
-      </form>
-    </div>
-  );
-}
-
-function RegisterModal({
-  open,
-  onClose,
-  onSubmit,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (input: { datasetId: string; name: string; description: string; schema: string; dataCommitment: string; accessConditions: string; pricePerJob: bigint }) => void;
-}) {
-  const [datasetId, setDatasetId] = useState("dataset-");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [schema, setSchema] = useState("");
-  const [commitment, setCommitment] = useState("sha256:");
-  const [conditions, setConditions] = useState("");
-  const [price, setPrice] = useState("3");
-  if (!open) return null;
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    onSubmit({ datasetId, name, description, schema, dataCommitment: commitment, accessConditions: conditions, pricePerJob: parseGen(price) });
-    onClose();
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-canvas/85 p-0 backdrop-blur-xl sm:items-center sm:p-5">
-      <form onSubmit={submit} className="panel-raised max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl p-5 sm:rounded-2xl sm:p-7">
-        <span className="label-caps text-mineral">New data surface</span>
-        <h2 className="mt-2 text-2xl font-extrabold tracking-[-0.04em]">Register dataset</h2>
-        <p className="mt-3 text-sm leading-6 text-muted">The contract locks a 10 GEN listing bond from your available stake when this listing activates.</p>
-        <div className="mt-6 grid gap-5 sm:grid-cols-2">
-          <label className="grid gap-2"><span className="label-caps">Dataset ID</span><input className="field font-mono text-xs" value={datasetId} onChange={(event) => setDatasetId(event.target.value)} required maxLength={96} /></label>
-          <label className="grid gap-2"><span className="label-caps">Display name</span><input className="field" value={name} onChange={(event) => setName(event.target.value)} required maxLength={160} /></label>
-        </div>
-        <label className="mt-5 grid gap-2"><span className="label-caps">Description</span><textarea className="field min-h-24 resize-y" value={description} onChange={(event) => setDescription(event.target.value)} required maxLength={4096} /></label>
-        <label className="mt-5 grid gap-2"><span className="label-caps">Schema and surface</span><input className="field" value={schema} onChange={(event) => setSchema(event.target.value)} placeholder="Parquet: field_a, field_b, field_c" required maxLength={4096} /></label>
-        <div className="mt-5 grid gap-5 sm:grid-cols-2"><label className="grid gap-2"><span className="label-caps">Data commitment</span><input className="field font-mono text-xs" value={commitment} onChange={(event) => setCommitment(event.target.value)} required maxLength={256} /></label><label className="grid gap-2"><span className="label-caps">Price per job / GEN</span><input className="field font-mono text-xs" value={price} onChange={(event) => setPrice(event.target.value)} required inputMode="decimal" /></label></div>
-        <label className="mt-5 grid gap-2"><span className="label-caps">Access conditions</span><textarea className="field min-h-24 resize-y" value={conditions} onChange={(event) => setConditions(event.target.value)} required maxLength={4096} /></label>
-        <div className="mt-7 flex justify-end gap-3"><button type="button" onClick={onClose} className="button-secondary">Cancel</button><button type="submit" className="button-primary">Lock bond and publish</button></div>
-      </form>
-    </div>
   );
 }

@@ -186,3 +186,28 @@ export function parseGen(value: string) {
   const [whole, decimal = ""] = normalized.split(".");
   return BigInt(whole) * 10n ** 18n + BigInt(decimal.padEnd(18, "0"));
 }
+
+import type { ContractDataset } from "./contract";
+
+export function toMarketplaceDataset(contractDs: ContractDataset): MarketplaceDataset {
+  return {
+    id: contractDs.datasetId,
+    name: contractDs.name,
+    description: contractDs.description,
+    provider: contractDs.provider,
+    providerName: shortAddress(contractDs.provider),
+    category: "Finance", // default category for on-chain datasets
+    format: "Parquet",
+    scale: "Verified Enclave",
+    priceWei: contractDs.pricePerJob,
+    priceLabel: formatGen(contractDs.pricePerJob),
+    bondLabel: formatGen(contractDs.listingBond),
+    dataCommitment: contractDs.dataCommitment,
+    accessConditions: contractDs.accessConditions,
+    schema: contractDs.schema,
+    tags: ["On-Chain", "Verified", "StudioNet"],
+    totalJobs: contractDs.totalJobs,
+    verified: true,
+    live: true,
+  };
+}
