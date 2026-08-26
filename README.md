@@ -1,4 +1,4 @@
-# 🌱 Compute2Data: Autonomous Privacy-Preserving AI Compute Marketplace on GenLayer
+# 🌱 Compute2Dataata: Autonomous Privacy-Preserving AI Compute Marketplace on GenLayer
 
 <p align="center">
   <img src="https://img.shields.io/badge/Network-GenLayer%20StudioNet-00E5FF?style=for-the-badge&logo=ethereum" alt="Network" />
@@ -34,8 +34,8 @@ High-utility enterprise datasets (e.g., electronic health records, genomic bioba
 - Intellectual property and trade secret exposure.
 - Lack of verifiable trust in decentralized execution.
 
-### The Compute2Data Paradigm
-**Compute2Data** fundamentally solves this through **GenLayer Intelligent Contracts**:
+### The Compute2Dataata Paradigm
+**Compute2Dataata** fundamentally solves this through **GenLayer Intelligent Contracts**:
 - **Zero Raw Data Exposure**: Models travel to the data enclave, not the other way around.
 - **Cryptographic Data Commitments**: Dataset providers lock GEN collateral and register immutable SHA-256 data schemas.
 - **Automated Escrow Protocol**: Researchers fund compute jobs with zero gas fees on GenLayer StudioNet.
@@ -160,7 +160,7 @@ class ComputeJob:
 
 ## 🛠️ Spec-Driven Development (GitHub Spec Kit)
 
-Compute2Data follows the rigorous **Spec-Driven Development (SDD)** process powered by [GitHub Spec Kit](https://github.com/github/spec-kit):
+Compute2Dataata follows the rigorous **Spec-Driven Development (SDD)** process powered by [GitHub Spec Kit](https://github.com/github/spec-kit):
 
 ```text
  📜 .specify/memory/constitution.md     --> Project Non-Negotiables & GenLayer Rules
@@ -205,8 +205,8 @@ pipx install genlayer-test
 
 ### 2. Clone & Run Automated Tests
 ```bash
-git clone https://github.com/SOBEK96/Compute2D.git
-cd Compute2Data
+git clone https://github.com/SOBEK96/Compute2Data.git
+cd Compute2Dataata
 
 # Run 100% automated lint and test suite
 ./run_tests.sh
@@ -273,7 +273,7 @@ UNTRUSTED_EVIDENCE_JSON_END
 ## 📂 Project Structure
 
 ```text
-Compute2Data/
+Compute2Dataata/
 ├── contracts/
 │   └── c2d_marketplace.py         # 🐍 GenLayer Intelligent Contract (v2.0)
 ├── test/
