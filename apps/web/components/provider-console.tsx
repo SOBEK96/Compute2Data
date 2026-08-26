@@ -158,7 +158,7 @@ export function ProviderConsole() {
     if (account) {
       loadOnChainData();
     }
-  }, [account]);
+  }, [account, loadOnChainData]);
 
   // Handle Stake Action
   const handleStake = async (e: FormEvent) => {
