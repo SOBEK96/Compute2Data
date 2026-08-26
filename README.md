@@ -1,4 +1,4 @@
-# 🌱 Compute2Dataata: Autonomous Privacy-Preserving AI Compute Marketplace on GenLayer
+# 🌱 Compute2Data: Autonomous Privacy-Preserving AI Compute Marketplace on GenLayer
 
 <p align="center">
   <img src="https://img.shields.io/badge/Network-GenLayer%20StudioNet-00E5FF?style=for-the-badge&logo=ethereum" alt="Network" />
