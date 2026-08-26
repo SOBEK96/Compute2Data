@@ -205,7 +205,7 @@ pipx install genlayer-test
 
 ### 2. Clone & Run Automated Tests
 ```bash
-git clone https://github.com/Handik4/Compute2Data.git
+git clone https://github.com/SOBEK96/Compute2D.git
 cd Compute2Data
 
 # Run 100% automated lint and test suite
@@ -298,7 +298,7 @@ Compute2Data/
 
 ## 👥 Authors & Community
 
-- **Architect & Lead Developer**: [Saeid (@Handik4)](https://github.com/Handik4)
+- **Architect & Lead Developer**: [Sobek (@SOBEK96)](https://github.com/SOBEK96)
 - **Built for**: [GenLayer Ecosystem](https://genlayer.com)
 - **Framework**: GitHub Spec Kit (Spec-Driven Development)
 

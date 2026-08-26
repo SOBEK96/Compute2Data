@@ -25,7 +25,7 @@
 
 ### V. Security Hygiene & Author Attribution
 - 0 leaks of local usernames or absolute filepaths.
-- Official Project Author: **Saeid** ([@Handik4](https://github.com/Handik4)).
+- Official Project Author: **Saeid** ([@SOBEK96](https://github.com/SOBEK96)).
 - Comprehensive `.gitignore` filtering virtual environments, keystores, build caches, and OS artifacts.
 
 ## Governance

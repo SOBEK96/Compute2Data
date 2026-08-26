@@ -62,6 +62,6 @@
 
 - [x] **TASK-501**: Ensure 0 leaks of local usernames across codebase.
 - [x] **TASK-502**: Create production `.gitignore` filtering virtual environments, keystores, and build caches.
-- [x] **TASK-503**: Create comprehensive educational `README.md` with author attributed to **Saeid** ([@Handik4](https://github.com/Handik4)).
+- [x] **TASK-503**: Create comprehensive educational `README.md` with author attributed to **Saeid** ([@SOBEK96](https://github.com/SOBEK96)).
 - [x] **TASK-504**: Ratify project constitution in `.specify/memory/constitution.md`.
 - [x] **TASK-505**: Commit all Spec Kit artifacts and code to git repository on branch `main`.

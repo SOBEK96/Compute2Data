@@ -3,7 +3,7 @@
 **Feature ID**: `002-c2d-contract-levelup`  
 **Status**: `APPROVED / IN IMPLEMENTATION`  
 **Network**: `GenLayer StudioNet`  
-**Author**: [Saeid (@Handik4)](https://github.com/Handik4)
+**Author**: [Saeid (@SOBEK96)](https://github.com/SOBEK96)
 
 ---
 

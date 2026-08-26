@@ -4,7 +4,7 @@
 **Status**: `RATIFIED / IMPLEMENTED`  
 **Network**: `GenLayer StudioNet`  
 **Contract Address**: `0xd1635bd866F6fd616Da1F1EBFFB686D9c01032F9`  
-**Author**: [Saeid (@Handik4)](https://github.com/Handik4)
+**Author**: [Saeid (@SOBEK96)](https://github.com/SOBEK96)
 
 ---
 
