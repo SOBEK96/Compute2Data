@@ -1,5 +1,5 @@
 import { createClient } from "genlayer-js";
-import { testnetBradbury } from "genlayer-js/chains";
+import { studionet } from "genlayer-js/chains";
 import type { CalldataEncodable } from "genlayer-js/types";
 import { ExecutionResult, TransactionStatus } from "genlayer-js/types";
 
@@ -144,9 +144,9 @@ export const contractAddress = /^0x[0-9a-fA-F]{40}$/.test(configuredAddress)
   : null;
 
 export const isContractConfigured = contractAddress !== null;
-export const networkName = "GenLayer Bradbury";
+export const networkName = "GenLayer StudioNet";
 
-const readClient = createClient({ chain: testnetBradbury });
+const readClient = createClient({ chain: studionet });
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value instanceof Map) {
@@ -198,11 +198,11 @@ async function writeAndWait(
   }
 
   const client = createClient({
-    chain: testnetBradbury,
+    chain: studionet,
     account,
     provider: window.ethereum,
   });
-  await client.connect("testnetBradbury");
+  await client.connect("studionet");
   const hash = await client.writeContract({
     address: requireContractAddress(),
     functionName,
