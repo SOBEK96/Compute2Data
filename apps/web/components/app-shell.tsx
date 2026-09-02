@@ -172,7 +172,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   isContractConfigured ? "text-mineral" : "text-ember",
                 )}
               />
-              <span>{isContractConfigured ? "GenLayer StudioNet" : "Demo Data Mode"}</span>
+              <span>{isContractConfigured ? networkName : "Demo Data Mode"}</span>
               <ArrowRightLeft className="h-3 w-3 text-muted/60" />
             </button>
           </div>
