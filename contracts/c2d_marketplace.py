@@ -33,7 +33,7 @@ ATTESTATION_VERIFIED = "ENCLAVE_VERIFIED"
 ATTESTATION_REJECTED = "ENCLAVE_REJECTED"
 
 # =============================================================================
-# ENCLAVE ATTESTATION MODEL — TRANSPARENCY NOTE
+# ENCLAVE ATTESTATION MODEL -- TRANSPARENCY NOTE
 # -----------------------------------------------------------------------------
 # This is a *modeled* TEE/SGX enclave attestation, NOT a live DCAP/ECDSA quote
 # verifier. Trust is rooted in an admin-controlled MRENCLAVE / MRSIGNER trust
@@ -43,7 +43,7 @@ ATTESTATION_REJECTED = "ENCLAVE_REJECTED"
 #
 # What IS real and enforced on-chain:
 #   * Authenticated evidence: a quote is accepted only if its measurements are
-#     whitelisted AND its signature seals the report body — reproducing a public
+#     whitelisted AND its signature seals the report body -- reproducing a public
 #     hash is not sufficient to forge an acceptance.
 #   * Cryptographic five-field binding over dataset, input (workload), model,
 #     compute-spec commitment, and output (see _binding_digest).
@@ -1024,7 +1024,7 @@ Return only a JSON object with exactly these fields:
 
         SLASHED-origin: restore the slashed stake from the protocol treasury.
         INCONCLUSIVE-origin: pay the provider the escrowed job fee and release
-        all locked collateral — no prior slash exists to reverse.
+        all locked collateral -- no prior slash exists to reverse.
         """
         origin_inconclusive = job.slash_amount == u256(0)
         restored = job.slash_amount
