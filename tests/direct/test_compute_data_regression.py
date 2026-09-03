@@ -144,6 +144,69 @@ def test_divergent_compute_spec_commitment_is_rejected(
     assert result["violation_code"] == "COMPUTE_SPEC_MISMATCH"
 
 
+def test_dataset_commitment_mismatch_is_rejected(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """A quote bound to a different dataset commitment than the one the job was
+    funded against is rejected as DATASET_MISMATCH, proving the dataset is part
+    of the authenticated binding a provider cannot substitute."""
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    direct_vm.sender = direct_alice
+    result = contract.submit_execution_proof(
+        "job-001",
+        build_attestation_quote(dataset_commitment="sha256:some-other-dataset"),
+        OUTPUT_COMMITMENT,
+    )
+    assert result["status"] == "SLASHED"
+    assert result["violation_code"] == "DATASET_MISMATCH"
+    assert result["attestation_status"] == "ENCLAVE_REJECTED"
+
+
+def test_input_workload_commitment_mismatch_is_rejected(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """A quote bound to a different requester input (workload) commitment than
+    the one committed at job creation is rejected as INPUT_COMMITMENT_MISMATCH."""
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    direct_vm.sender = direct_alice
+    result = contract.submit_execution_proof(
+        "job-001",
+        build_attestation_quote(input_commitment="sha256:different-workload-input"),
+        OUTPUT_COMMITMENT,
+    )
+    assert result["status"] == "SLASHED"
+    assert result["violation_code"] == "INPUT_COMMITMENT_MISMATCH"
+    assert result["attestation_status"] == "ENCLAVE_REJECTED"
+
+
+def test_output_commitment_arg_must_match_attested_output(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """The output_commitment call argument must equal the output sealed inside
+    the signed quote. A quote attesting a different output than the one the
+    provider submits on-chain is rejected as OUTPUT_COMMITMENT_INVALID."""
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    direct_vm.sender = direct_alice
+    # The quote is internally consistent for a different output than the arg.
+    result = contract.submit_execution_proof(
+        "job-001",
+        build_attestation_quote(output_commitment="sha256:attested-a-different-output"),
+        OUTPUT_COMMITMENT,
+    )
+    assert result["status"] == "SLASHED"
+    assert result["violation_code"] == "OUTPUT_COMMITMENT_INVALID"
+    assert result["attestation_status"] == "ENCLAVE_REJECTED"
+
+
 def test_untrusted_enclave_measurement_is_rejected(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
@@ -448,6 +511,7 @@ def test_inconclusive_appeal_accepted_settles_payment_and_releases_collateral(
     result = contract.resolve_appeal("job-001")
     job = contract.get_job("job-001")
     provider = contract.get_provider(address_hex(direct_alice))
+    dataset = contract.get_dataset("mobility-v1")
     stats = contract.get_marketplace_stats()
 
     assert result["status"] == "APPEAL_ACCEPTED"
@@ -461,6 +525,8 @@ def test_inconclusive_appeal_accepted_settles_payment_and_releases_collateral(
     assert provider["slashed_stake"] == 0
     assert stats["total_escrowed"] == 0
     assert stats["total_appeal_bonds"] == 0
+    # Open-job accounting is decremented: no dangling active job leaks.
+    assert dataset["open_jobs"] == 0
 
 
 def test_inconclusive_appeal_rejected_slashes_and_refunds_requester(
@@ -493,6 +559,7 @@ def test_inconclusive_appeal_rejected_slashes_and_refunds_requester(
     result = contract.resolve_appeal("job-001")
     job = contract.get_job("job-001")
     provider = contract.get_provider(address_hex(direct_alice))
+    dataset = contract.get_dataset("mobility-v1")
     stats = contract.get_marketplace_stats()
 
     assert result["status"] == "APPEAL_REJECTED"
@@ -502,6 +569,8 @@ def test_inconclusive_appeal_rejected_slashes_and_refunds_requester(
     assert provider["slashed_stake"] == EXPECTED_SLASH
     assert stats["total_escrowed"] == 0
     assert stats["total_appeal_bonds"] == 0
+    # Open-job accounting is decremented even on the rejected slash path.
+    assert dataset["open_jobs"] == 0
 
 
 def test_unadjudicated_appeal_times_out_and_returns_bond(

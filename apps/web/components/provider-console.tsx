@@ -101,6 +101,8 @@ const demoProvider: ProviderState = {
 };
 
 const demoJobDefaults = {
+  computeSpec:
+    "runtime=confidential-vm; framework=pytorch-2.3; entrypoint=infer.py; output=artifact-commitment",
   verified: false,
   slashAmount: 0n,
   settlementAmount: 0n,
@@ -289,6 +291,7 @@ export function ProviderConsole() {
         inputCommitment: selectedJob.inputCommitment,
         // A mismatch test intentionally binds the artifact to the wrong model.
         modelId: tamperModel ? `${selectedJob.modelId}-tampered` : selectedJob.modelId,
+        computeSpec: selectedJob.computeSpec,
         outputCommitment: outputCommitment.trim(),
         resultStatus,
       });
@@ -316,6 +319,7 @@ export function ProviderConsole() {
         datasetCommitment: datasetCommitment.trim(),
         inputCommitment: selectedJob.inputCommitment,
         modelId: selectedJob.modelId,
+        computeSpec: selectedJob.computeSpec,
         outputCommitment: outputCommitment.trim(),
         resultStatus: "COMPLETED",
       });

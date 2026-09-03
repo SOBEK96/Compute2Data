@@ -32,7 +32,28 @@ ATTESTATION_PENDING = "PENDING"
 ATTESTATION_VERIFIED = "ENCLAVE_VERIFIED"
 ATTESTATION_REJECTED = "ENCLAVE_REJECTED"
 
-# Domain separation tags for the simulated remote attestation. Keeping these
+# =============================================================================
+# ENCLAVE ATTESTATION MODEL — TRANSPARENCY NOTE
+# -----------------------------------------------------------------------------
+# This is a *modeled* TEE/SGX enclave attestation, NOT a live DCAP/ECDSA quote
+# verifier. Trust is rooted in an admin-controlled MRENCLAVE / MRSIGNER trust
+# registry (see trusted_enclaves / trusted_signers) plus an integrity-protecting
+# enclave signature (_quote_signature). The contract does not contact Intel's
+# attestation service or verify a real quote against Intel's attestation key.
+#
+# What IS real and enforced on-chain:
+#   * Authenticated evidence: a quote is accepted only if its measurements are
+#     whitelisted AND its signature seals the report body — reproducing a public
+#     hash is not sufficient to forge an acceptance.
+#   * Cryptographic five-field binding over dataset, input (workload), model,
+#     compute-spec commitment, and output (see _binding_digest).
+#
+# Upgrade path: replace the _quote_signature check in _inspect_enclave_quote
+# with a real DCAP/ECDSA quote-verification precompile/oracle. Binding, trust
+# registry, settlement, and appeal logic are unaffected.
+# =============================================================================
+#
+# Domain separation tags for the modeled remote attestation. Keeping these
 # explicit and versioned lets clients reproduce the exact bytes the enclave
 # signs and the contract re-derives on chain.
 BINDING_DOMAIN = "c2d-attestation-binding-v1"
@@ -181,12 +202,16 @@ def _binding_digest(
 
 
 def _quote_signature(mrenclave: str, mrsigner: str, report_data: str) -> str:
-    """Simulated enclave signature over the attestation report body.
+    """Modeled enclave signature over the attestation report body.
 
-    A production deployment would verify a DCAP/ECDSA quote against Intel's
-    attestation key. Here we model an integrity-protecting signature over the
-    report body so tampering with any measurement or the bound report data
-    invalidates the quote deterministically.
+    TRANSPARENCY: this is the single simulation boundary of the attestation
+    model. A production deployment would verify a DCAP/ECDSA quote against
+    Intel's attestation key here. We instead model an integrity-protecting
+    signature over the report body so tampering with any measurement or the
+    bound report data invalidates the quote deterministically. Trust is still
+    rooted in the on-chain MRENCLAVE/MRSIGNER registry checked by the caller.
+    Swapping this primitive for a real quote verifier leaves every other part
+    of the binding, settlement, and appeal logic unchanged.
     """
     body = "|".join([QUOTE_DOMAIN, mrenclave, mrsigner, report_data])
     return hashlib.sha256(body.encode("utf-8")).hexdigest()

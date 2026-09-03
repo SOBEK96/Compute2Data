@@ -268,6 +268,30 @@ UNTRUSTED_EVIDENCE_JSON_END
 2. **Reentrancy Protection**: GenLayer's transaction model and `_Recipient.emit_transfer(..., on="finalized")` prevents cross-contract reentrancy.
 3. **Deterministic State Guards**: All state checks (balance validation, permissions, existence) occur in deterministic Python *before* entering `gl.vm.run_nondet_unsafe`.
 
+### 🔒 Enclave Attestation Model (Transparency Note)
+
+> **This is a modeled TEE/SGX enclave attestation, not a live DCAP/ECDSA quote verifier.**
+
+The contract does **not** call out to Intel's Provisioning Certification Service or
+verify a real DCAP quote signature against Intel's attestation key. Instead it models
+an integrity-protecting enclave signature (`_quote_signature`) and roots trust in an
+admin-controlled **MRENCLAVE / MRSIGNER trust registry** (`trusted_enclaves` /
+`trusted_signers`). What is fully real and enforced on-chain:
+
+- **Authenticated evidence, not reproducible hashes** — a quote is only accepted if its
+  measurements are whitelisted in the trust registry *and* its signature seals the
+  report body, so a client cannot forge an acceptance by reproducing a public hash.
+- **Cryptographic five-field binding** — `report_data` is the canonical digest over
+  `dataset_commitment | input(workload)_commitment | model_id | compute_spec_commitment |
+  output_commitment` (`_binding_digest`). Substituting *any* committed field yields a
+  different binding the signature cannot cover, producing a deterministic rejection code.
+
+**Upgrade path:** swap `_quote_signature` verification for a real DCAP/ECDSA quote
+verification precompile/oracle. The binding, trust registry, settlement, and appeal
+logic remain unchanged — only the signature-check primitive is replaced. This boundary
+is documented inline in `contracts/c2d_marketplace.py` (`_quote_signature`,
+`_inspect_enclave_quote`) and reproduced client-side in `apps/web/lib/contract.ts`.
+
 ---
 
 ## 📂 Project Structure

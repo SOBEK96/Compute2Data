@@ -35,6 +35,7 @@ export type ContractJob = {
   provider: string;
   datasetId: string;
   modelId: string;
+  computeSpec: string;
   inputCommitment: string;
   fundedAmount: bigint;
   status: string;
@@ -76,6 +77,12 @@ export type ProviderReputation = {
 // Domain separation tags provisioned inside contracts/c2d_marketplace.py. The
 // browser reproduces the exact bytes the enclave signs and the contract
 // re-derives on chain so an attestation can be assembled client-side.
+//
+// TRANSPARENCY: this mirrors a *modeled* TEE/SGX enclave attestation, not a
+// live DCAP/ECDSA quote. Trust is rooted in the on-chain MRENCLAVE/MRSIGNER
+// trust registry; the quote signature is an integrity-protecting model of an
+// enclave signature. See the "Enclave Attestation Model" note in README.md
+// and contracts/c2d_marketplace.py (_quote_signature).
 const BINDING_DOMAIN = "c2d-attestation-binding-v1";
 const QUOTE_DOMAIN = "c2d-enclave-quote-v1";
 export const DEFAULT_ENCLAVE_MEASUREMENT = "11".repeat(32);
@@ -93,27 +100,40 @@ export type AttestationArtifact = {
   datasetCommitment: string;
   inputCommitment: string;
   modelId: string;
+  // Raw compute specification string as stored on-chain for the job. The
+  // commitment sealed into the quote is derived from this exactly as the
+  // contract does (sha256 of the spec), so provider and chain agree.
+  computeSpec: string;
   outputCommitment: string;
   resultStatus?: string;
   mrenclave?: string;
   mrsigner?: string;
+  // Optional override to intentionally bind a divergent compute-spec
+  // commitment for mismatch/slash regression testing in the console.
+  computeSpecCommitmentOverride?: string;
 };
 
 /**
  * Assemble a TEE/SGX style enclave attestation quote whose report data
  * cryptographically binds the produced artifact to the exact dataset
- * commitment, requester input commitment and model id.
+ * commitment, requester input commitment, model id, compute-spec commitment
+ * and output commitment — the same five-field binding the contract re-derives
+ * on chain. Omitting the compute-spec commitment would make the quote fail
+ * deterministic verification, so it is always present in the signed payload.
  */
 export async function buildAttestationQuote(artifact: AttestationArtifact): Promise<string> {
   const mrenclave = artifact.mrenclave ?? DEFAULT_ENCLAVE_MEASUREMENT;
   const mrsigner = artifact.mrsigner ?? DEFAULT_ENCLAVE_SIGNER;
   const resultStatus = artifact.resultStatus ?? "COMPLETED";
+  const computeSpecCommitment =
+    artifact.computeSpecCommitmentOverride ?? (await sha256Hex(artifact.computeSpec));
   const reportData = await sha256Hex(
     [
       BINDING_DOMAIN,
       artifact.datasetCommitment,
       artifact.inputCommitment,
       artifact.modelId,
+      computeSpecCommitment,
       artifact.outputCommitment,
     ].join("|"),
   );
@@ -131,6 +151,7 @@ export async function buildAttestationQuote(artifact: AttestationArtifact): Prom
       dataset_commitment: artifact.datasetCommitment,
       input_commitment: artifact.inputCommitment,
       model_id: artifact.modelId,
+      compute_spec_commitment: computeSpecCommitment,
       output_commitment: artifact.outputCommitment,
       result_status: resultStatus,
     },
@@ -305,6 +326,7 @@ export async function readProviderJobs(account: HexAddress): Promise<ContractJob
         provider: asString(getField(record, "provider", "provider")),
         datasetId: asString(getField(record, "dataset_id", "datasetId")),
         modelId: asString(getField(record, "model_id", "modelId")),
+        computeSpec: asString(getField(record, "compute_spec", "computeSpec")),
         inputCommitment: asString(
           getField(record, "input_commitment", "inputCommitment"),
         ),
