@@ -1,6 +1,9 @@
+import base64 as _base64
 import datetime as _dt
 import hashlib
 import json
+
+import pytest
 
 
 ONE_GEN = 10**18
@@ -11,9 +14,18 @@ JOB_PRICE = 3 * ONE_GEN
 # These mirror the domain tags and default measurements provisioned inside
 # contracts/c2d_marketplace.py so tests reproduce the exact attestation bytes.
 BINDING_DOMAIN = "c2d-attestation-binding-v1"
+# QUOTE_DOMAIN lives ONLY in the test harness now: it is the signing scheme of
+# the *simulated* attestation authority (see _attestation_authority below), not
+# of the contract. The contract no longer re-derives any signature from public
+# values -- it trusts the authority's verdict. Keeping the scheme here models a
+# genuine enclave signing its quote and an Intel-rooted PCS/IAS verifier
+# checking it off chain.
 QUOTE_DOMAIN = "c2d-enclave-quote-v1"
 DEFAULT_ENCLAVE_MEASUREMENT = "11" * 32
 DEFAULT_ENCLAVE_SIGNER = "22" * 32
+
+# Must match DEFAULT_ATTESTATION_ENDPOINT in contracts/c2d_marketplace.py.
+ATTESTATION_ENDPOINT = "https://attestation.compute2data.network/dcap/v1/verify-quote"
 
 DATASET_COMMITMENT = "sha256:dataset-commitment-4a1c"
 INPUT_COMMITMENT = "sha256:input-commitment-77f0"
@@ -167,7 +179,83 @@ def build_attestation_quote_with_binding_mismatch(
     )
 
 
+def _verify_quote_authenticity(quote_json):
+    """Simulate the remote attestation authority's cryptographic verdict.
+
+    This is the crypto that moved OUT of the contract: an Intel DCAP/PCS or IAS
+    verifier checks the enclave's signature over the report body and returns the
+    AUTHENTICATED measurements and report data. A quote whose signature does not
+    seal (mrenclave, mrsigner, report_data) is rejected as SIGNATURE_INVALID --
+    which is exactly what defeats a browser that only knows the public values.
+    """
+    try:
+        parsed = json.loads(quote_json)
+        enclave = parsed["enclave"]
+        mrenclave = enclave["mrenclave"]
+        mrsigner = enclave["mrsigner"]
+        report_data = enclave["report_data"]
+        signature = enclave["quote_signature"]
+    except (ValueError, TypeError, KeyError):
+        return {"status": "ATTESTATION_MALFORMED", "mrenclave": "", "mrsigner": "", "report_data": ""}
+
+    if signature != _quote_signature(mrenclave, mrsigner, report_data):
+        return {"status": "SIGNATURE_INVALID", "mrenclave": "", "mrsigner": "", "report_data": ""}
+    return {
+        "status": "OK",
+        "mrenclave": mrenclave,
+        "mrsigner": mrsigner,
+        "report_data": report_data,
+    }
+
+
+def _attestation_authority(data):
+    """Live web handler standing in for the remote attestation service.
+
+    Reads the base64 quote the contract submits in the X-Enclave-Quote header,
+    runs the authority's cryptographic verification, and returns a JSON verdict
+    in the gltest live-handler response shape.
+    """
+    headers = data.get("headers", {}) or {}
+    quote_b64 = headers.get("X-Enclave-Quote", "")
+    if isinstance(quote_b64, (bytes, bytearray)):
+        quote_b64 = bytes(quote_b64).decode("ascii", "replace")
+    try:
+        quote_json = _base64.b64decode(quote_b64).decode("utf-8")
+    except (ValueError, TypeError, UnicodeDecodeError):
+        quote_json = ""
+
+    verdict = _verify_quote_authenticity(quote_json)
+    body = json.dumps(verdict).encode("utf-8")
+    return {"ok": {"response": {"status": 200, "headers": {}, "body": body}}}
+
+
+def install_attestation_authority(direct_vm):
+    """Install the simulated attestation authority as the live web handler.
+
+    Every submit_execution_proof / resolve_appeal reaches the authority via
+    gl.nondet.web.get; this makes genuine quotes verify and fabricated ones
+    revert, with no per-test mock wiring. A test can override authenticity by
+    registering an explicit direct_vm.mock_web(ATTESTATION_ENDPOINT, ...), which
+    takes precedence over this fallback handler.
+    """
+    direct_vm._live_web_handler = _attestation_authority
+
+
+@pytest.fixture(autouse=True)
+def _attestation_authority_autouse(direct_vm):
+    """Make the attestation authority reachable for every direct-mode test.
+
+    Installed unconditionally so a test that stands up its own provider (without
+    stake_and_register) still reaches a working authority. Registering an
+    explicit mock_web for the endpoint still overrides this fallback.
+    """
+    install_attestation_authority(direct_vm)
+    return direct_vm
+
+
 def stake_and_register(direct_vm, contract, provider):
+    # Make the remote attestation authority reachable for the whole test.
+    install_attestation_authority(direct_vm)
     direct_vm.sender = provider
     direct_vm.value = DATASET_STAKE + (2 * JOB_COLLATERAL)
     contract.stake_provider()
