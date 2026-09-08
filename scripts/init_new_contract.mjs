@@ -2,7 +2,7 @@ import fs from 'fs';
 import { createClient, createAccount } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
 
-const NEW_CONTRACT = "0x08A1DF5D8f1DE7Cced7E03E8055E7c106eb13987";
+const NEW_CONTRACT = "0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd";
 const account = createAccount();
 
 console.log("Initializing new contract:", NEW_CONTRACT);
@@ -53,7 +53,7 @@ async function main() {
 
   console.log("\n4. Updating frontend config...");
   const envPath = '/Users/ehs4n/Compute2Data/apps/web/.env.local';
-  const envContent = `NEXT_PUBLIC_CONTRACT_ADDRESS=${NEW_CONTRACT}\nNEXT_PUBLIC_STUDIONET_RPC=https://studio.genlayer.com/api\nNEXT_PUBLIC_CHAIN_ID=500000\n`;
+  const envContent = `NEXT_PUBLIC_C2D_CONTRACT_ADDRESS=${NEW_CONTRACT}\nNEXT_PUBLIC_CONTRACT_ADDRESS=${NEW_CONTRACT}\nNEXT_PUBLIC_STUDIONET_RPC=https://studio.genlayer.com/api\nNEXT_PUBLIC_CHAIN_ID=61999\nNEXT_PUBLIC_STUDIONET_EXPLORER=https://explorer-studio.genlayer.com\n`;
   fs.writeFileSync(envPath, envContent);
 
   const contractTsPath = '/Users/ehs4n/Compute2Data/apps/web/lib/contract.ts';

@@ -181,18 +181,15 @@ Compute2Dataata follows the rigorous **Spec-Driven Development (SDD)** process p
 
 | Parameter | On-Chain Value |
 | :--- | :--- |
-| **Network Name** | `GenLayer StudioNet` (Gasless AI Sandbox) |
-| **Chain ID** | `500000` (`0x7a120`) |
+| **Network Name** | `GenLayer StudioNet` (Stable, Gasless AI Sandbox) |
+| **Chain ID** | `61999` (`0xF22F`) |
 | **Native Token** | **GEN** |
 | **RPC Endpoint** | `https://studio.genlayer.com/api` |
-| **Active Contract v2.0** | [`0xD63B71E7cC32C8A81dFd1A26b89D4c059BE15226`](https://studio.genlayer.com) |
-| **Deployer Address** | `0xEE4f024609b50293a5806a6bDBd0c146257FdfAc` |
-| **Deployment Transaction**| `0x5ab76291694bdeeacd327e49eedbdad8f4d98037f8bb7c2c8069a37531210231` |
+| **Explorer** | `https://explorer-studio.genlayer.com` |
+| **Active Contract (authentic attestation)** | [`0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd`](https://explorer-studio.genlayer.com/address/0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd) |
+| **Deployer Address** | `0x91b82b1F3317B7C141ba6Cbdd0b666AA563b9cDb` |
+| **Deployment Transaction**| `0x059168ed040823a2df20158587a52d9d007b3d3b2e098c6b798f6748d1cd33be` |
 | **Consensus Receipt** | `ACCEPTED` / `MAJORITY_AGREE` (100% Validator Agreement) |
-
-### Genesis Verification Transactions
-1. **Provider Staking (25 GEN)**: `0xc350edb639850329b7f241fe940d8fad87f2d908cd17e2058b47a13da83eeab9`
-2. **Genesis Dataset Registration (`genomics-pan-cancer-v1`)**: `0xc80a335eeb26a91164afeca9c9f9197cc695be2fe56f85d3e4002b338850538b`
 
 ---
 

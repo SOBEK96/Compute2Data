@@ -20,7 +20,7 @@
 
 ### IV. Web3 Wallet & Network Compliance
 - Native network token MUST be named **GEN**.
-- MetaMask network switcher must target GenLayer StudioNet (`Chain ID: 0x7a120` / `500000`).
+- MetaMask network switcher must target stable GenLayer StudioNet (`Chain ID: 0xf22f` / `61999`, RPC `https://studio.genlayer.com/api`).
 - Header must include active address indicator, copy tool, and dedicated red Disconnect action.
 
 ### V. Security Hygiene & Author Attribution

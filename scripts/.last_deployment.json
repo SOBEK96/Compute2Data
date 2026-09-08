@@ -1,0 +1,9 @@
+{
+  "contract_address": "0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd",
+  "deploy_tx_hash": "0x059168ed040823a2df20158587a52d9d007b3d3b2e098c6b798f6748d1cd33be",
+  "deployer": "0x91b82b1F3317B7C141ba6Cbdd0b666AA563b9cDb",
+  "chain_id": 61999,
+  "rpc": "https://studio.genlayer.com/api",
+  "status": "ACCEPTED",
+  "result": "MAJORITY_AGREE"
+}

@@ -80,7 +80,7 @@ async function main() {
 
     console.log("\n🔧 Step 5: Updating web app configuration...");
     const envPath = '/Users/ehs4n/Compute2Data/apps/web/.env.local';
-    const envContent = `NEXT_PUBLIC_CONTRACT_ADDRESS=${contractAddress}\nNEXT_PUBLIC_STUDIONET_RPC=https://studio.genlayer.com/rpc\nNEXT_PUBLIC_CHAIN_ID=500000\n`;
+    const envContent = `NEXT_PUBLIC_C2D_CONTRACT_ADDRESS=${contractAddress}\nNEXT_PUBLIC_CONTRACT_ADDRESS=${contractAddress}\nNEXT_PUBLIC_STUDIONET_RPC=https://studio.genlayer.com/api\nNEXT_PUBLIC_CHAIN_ID=61999\nNEXT_PUBLIC_STUDIONET_EXPLORER=https://explorer-studio.genlayer.com\n`;
     fs.writeFileSync(envPath, envContent);
 
     const contractTsPath = '/Users/ehs4n/Compute2Data/apps/web/lib/contract.ts';
