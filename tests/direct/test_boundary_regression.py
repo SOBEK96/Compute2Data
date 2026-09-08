@@ -3,10 +3,17 @@
 This suite locks in every domain-specific threshold and bracket boundary by
 calling the contract's module-level pure helper functions directly, WITHOUT a
 per-test VM fixture. The helpers under test (_is_hex_of_bytes, _binding_digest,
-_quote_signature, _inspect_enclave_quote, _validate_production_id) depend only
-on hashlib / json and never touch VM storage or nondeterminism, so exercising
-them in-process runs in well under a millisecond each and pins the exact
-boundary at which each threshold flips.
+_inspect_enclave_quote, _validate_production_id) depend only on hashlib / json
+and never touch VM storage or nondeterminism, so exercising them in-process runs
+in well under a millisecond each and pins the exact boundary at which each
+threshold flips.
+
+Authenticity of a quote is NOT decided here: the contract no longer re-derives a
+signature from public values on chain. _inspect_enclave_quote only performs the
+deterministic structural + five-field binding checks; signature authenticity is
+established off chain by the remote attestation authority (exercised in
+test_authentic_attestation.py). Accordingly this suite asserts that a
+structurally sound quote with any well-formed signature passes inspection.
 
 The contract module is imported once (module-scoped fixture) using the same SDK
 loader the direct plugin uses; the imported module object is held for the whole
@@ -81,14 +88,16 @@ def _valid_quote(
     mrsigner=MRSIGNER,
     result_status="COMPLETED",
     include_compute_spec=True,
-    tamper_signature=False,
+    malformed_signature=False,
     tamper_binding=False,
 ):
-    """Build a quote JSON string using the module's own digest helpers.
+    """Build a quote JSON string using the module's own binding helper.
 
-    Reusing the contract's _binding_digest / _quote_signature guarantees the
-    fixtures reproduce the exact bytes the contract re-derives, so a boundary
-    result reflects the contract logic and not a divergent test re-implementation.
+    Reusing the contract's _binding_digest guarantees the report_data reproduces
+    the exact bytes the contract re-derives, so a boundary result reflects the
+    contract logic and not a divergent test re-implementation. The signature is
+    an opaque blob the contract does not verify on chain (only its 32-byte-hex
+    shape is checked), so we synthesize a well-formed placeholder.
     """
     compute_spec_commitment = hashlib.sha256(compute_spec.encode("utf-8")).hexdigest()
     report_data = module._binding_digest(
@@ -107,9 +116,13 @@ def _valid_quote(
             compute_spec_commitment,
             output_commitment + "-decoy",
         )
-    signature = module._quote_signature(mrenclave, mrsigner, report_data)
-    if tamper_signature:
-        signature = "00" * 32
+    # Opaque, well-formed 32-byte-hex signature placeholder (not verified here).
+    signature = hashlib.sha256(
+        (mrenclave + mrsigner + report_data).encode("utf-8")
+    ).hexdigest()
+    if malformed_signature:
+        # Not 32 bytes of hex: must fail the structural shape check.
+        signature = "00" * 8
     artifact = {
         "dataset_commitment": dataset_commitment,
         "input_commitment": input_commitment,
@@ -208,8 +221,9 @@ def _spec_commitment(spec: str) -> str:
         ({}, ("dc", "ic", "mid", "different-spec"), "COMPUTE_SPEC_MISMATCH"),
         # Omitting the mandatory compute-spec commitment is rejected outright.
         ({"include_compute_spec": False}, ("dc", "ic", "mid", "spec"), "COMPUTE_SPEC_COMMITMENT_INVALID"),
-        # Forged signature and forged binding are each caught.
-        ({"tamper_signature": True}, ("dc", "ic", "mid", "spec"), "SIGNATURE_INVALID"),
+        # A malformed (wrong-length) signature blob fails the structural check;
+        # a forged binding is caught by the five-field digest comparison.
+        ({"malformed_signature": True}, ("dc", "ic", "mid", "spec"), "MALFORMED_QUOTE"),
         ({"tamper_binding": True}, ("dc", "ic", "mid", "spec"), "BINDING_MISMATCH"),
     ],
 )
@@ -252,12 +266,21 @@ def test_binding_digest_changes_when_any_field_changes(c2d, field_index):
     assert c2d._binding_digest(*base) != c2d._binding_digest(*mutated)
 
 
-def test_signature_binds_measurements_and_report(c2d):
-    report = c2d._binding_digest("d", "i", "m", "c", "o")
-    base = c2d._quote_signature(MRENCLAVE, MRSIGNER, report)
-    assert base != c2d._quote_signature("99" * 32, MRSIGNER, report)   # mrenclave matters
-    assert base != c2d._quote_signature(MRENCLAVE, "99" * 32, report)  # mrsigner matters
-    assert base != c2d._quote_signature(MRENCLAVE, MRSIGNER, report[::-1])  # report matters
+def test_inspect_does_not_authenticate_signature(c2d):
+    """The contract no longer re-derives a signature from public values: a quote
+    with an arbitrary but well-formed signature still passes structural + binding
+    inspection. Authenticity is delegated to the remote attestation authority."""
+    arbitrary_sig = "ab" * 32
+    quote = _valid_quote(c2d)
+    parsed = json.loads(quote)
+    parsed["enclave"]["quote_signature"] = arbitrary_sig
+    result = c2d._inspect_enclave_quote(
+        json.dumps(parsed, sort_keys=True), "dc", "ic", "mid", _spec_commitment("spec")
+    )
+    assert result["ok"] is True
+    assert result["code"] == "NONE"
+    # And the module exposes no on-chain signature re-derivation helper anymore.
+    assert not hasattr(c2d, "_quote_signature")
 
 
 # =============================================================================

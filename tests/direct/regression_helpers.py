@@ -29,6 +29,7 @@ if _PRIMARY_TEST_DIR not in _sys.path:
     _sys.path.insert(0, _PRIMARY_TEST_DIR)
 
 from conftest import (  # noqa: E402  (path set up above)
+    ATTESTATION_ENDPOINT,
     DATASET_COMMITMENT,
     DATASET_STAKE,
     INPUT_COMMITMENT,
@@ -43,6 +44,7 @@ from conftest import (  # noqa: E402  (path set up above)
     fund_job,
     future_iso,
     inconclusive_assessment,
+    install_attestation_authority,
     rejected_assessment,
     stake_and_register,
     valid_assessment,
@@ -74,6 +76,7 @@ def iso_from_epoch(epoch) -> str:
 
 
 __all__ = [
+    "ATTESTATION_ENDPOINT",
     "CONTRACT_PATH",
     "DATASET_COMMITMENT",
     "DATASET_STAKE",
@@ -90,6 +93,7 @@ __all__ = [
     "fund_job",
     "future_iso",
     "inconclusive_assessment",
+    "install_attestation_authority",
     "iso_from_epoch",
     "rejected_assessment",
     "stake_and_register",

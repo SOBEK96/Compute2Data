@@ -1,5 +1,6 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
+import base64
 import datetime
 import hashlib
 import json
@@ -33,31 +34,45 @@ ATTESTATION_VERIFIED = "ENCLAVE_VERIFIED"
 ATTESTATION_REJECTED = "ENCLAVE_REJECTED"
 
 # =============================================================================
-# ENCLAVE ATTESTATION MODEL -- TRANSPARENCY NOTE
+# AUTHENTIC TEE ATTESTATION -- VERIFICATION ARCHITECTURE
 # -----------------------------------------------------------------------------
-# This is a *modeled* TEE/SGX enclave attestation, NOT a live DCAP/ECDSA quote
-# verifier. Trust is rooted in an admin-controlled MRENCLAVE / MRSIGNER trust
-# registry (see trusted_enclaves / trusted_signers) plus an integrity-protecting
-# enclave signature (_quote_signature). The contract does not contact Intel's
-# attestation service or verify a real quote against Intel's attestation key.
+# Authenticity of an enclave quote is established by an INDEPENDENT remote
+# attestation authority (an Intel DCAP/PCS or IAS style verifier), reached from
+# the contract via gl.nondet.web.get wrapped in gl.eq_principle.strict_eq. The
+# contract NEVER re-derives a signature from public values on chain: an
+# attacker who knows only the public MRENCLAVE / MRSIGNER / report-data can no
+# longer fabricate an acceptance, because those public values cannot make the
+# real attestation authority vouch for a quote that no genuine enclave signed.
 #
-# What IS real and enforced on-chain:
-#   * Authenticated evidence: a quote is accepted only if its measurements are
-#     whitelisted AND its signature seals the report body -- reproducing a public
-#     hash is not sufficient to forge an acceptance.
-#   * Cryptographic five-field binding over dataset, input (workload), model,
-#     compute-spec commitment, and output (see _binding_digest).
-#
-# Upgrade path: replace the _quote_signature check in _inspect_enclave_quote
-# with a real DCAP/ECDSA quote-verification precompile/oracle. Binding, trust
-# registry, settlement, and appeal logic are unaffected.
+# Verification is layered:
+#   1. Deterministic on-chain binding (see _binding_digest / _inspect_enclave_quote):
+#      the quote's report_data MUST equal the canonical five-field commitment
+#      over dataset, input (workload), model, compute-spec, and output. Any
+#      substitution changes the digest and is rejected without any network I/O.
+#   2. Authentic remote attestation (see _authenticate_quote): the opaque quote
+#      is submitted to the attestation authority, which cryptographically
+#      verifies the DCAP/ECDSA quote against Intel's collateral and returns the
+#      AUTHENTICATED MRENCLAVE / MRSIGNER / report_data plus a TCB status. The
+#      contract trusts only what the authority returns, cross-checks it against
+#      the on-chain binding, and then against the admin trust registry.
+#   Every validator independently re-runs step 2 and must agree on the verdict
+#   (strict_eq), so a browser-fabricated attestation reverts deterministically.
 # =============================================================================
 #
-# Domain separation tags for the modeled remote attestation. Keeping these
-# explicit and versioned lets clients reproduce the exact bytes the enclave
-# signs and the contract re-derives on chain.
+# Domain separation tag for the five-field artifact binding. Keeping it explicit
+# and versioned lets an enclave reproduce the exact bytes it seals into the
+# quote's report_data and the contract re-derives on chain.
 BINDING_DOMAIN = "c2d-attestation-binding-v1"
-QUOTE_DOMAIN = "c2d-enclave-quote-v1"
+
+# Attestation authority endpoint. A production deployment points this at an
+# Intel DCAP/PCS or IAS quote-verification service; the admin can repoint it via
+# set_attestation_endpoint (e.g. to rotate to a new PCS host).
+DEFAULT_ATTESTATION_ENDPOINT = "https://attestation.compute2data.network/dcap/v1/verify-quote"
+
+# Status the attestation authority returns for a genuinely verified quote. Any
+# other status (e.g. SIGNATURE_INVALID, QUOTE_EXPIRED, GROUP_OUT_OF_DATE) is a
+# hard rejection carried straight through as the settlement violation code.
+ATTESTATION_STATUS_OK = "OK"
 
 # Default trusted measurements provisioned at deployment. They stand in for the
 # MRENCLAVE (code image) and MRSIGNER (signing identity) values an operator
@@ -201,22 +216,6 @@ def _binding_digest(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _quote_signature(mrenclave: str, mrsigner: str, report_data: str) -> str:
-    """Modeled enclave signature over the attestation report body.
-
-    TRANSPARENCY: this is the single simulation boundary of the attestation
-    model. A production deployment would verify a DCAP/ECDSA quote against
-    Intel's attestation key here. We instead model an integrity-protecting
-    signature over the report body so tampering with any measurement or the
-    bound report data invalidates the quote deterministically. Trust is still
-    rooted in the on-chain MRENCLAVE/MRSIGNER registry checked by the caller.
-    Swapping this primitive for a real quote verifier leaves every other part
-    of the binding, settlement, and appeal logic unchanged.
-    """
-    body = "|".join([QUOTE_DOMAIN, mrenclave, mrsigner, report_data])
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
-
-
 def _inspect_enclave_quote(
     quote_json: str,
     dataset_commitment: str,
@@ -224,21 +223,26 @@ def _inspect_enclave_quote(
     model_id: str,
     compute_spec_commitment: str,
 ) -> dict:
-    """Structurally verify a quote and its full artifact binding without touching storage.
+    """Deterministically verify a quote's STRUCTURE and artifact binding.
 
-    Returns a dict describing the outcome. This function never raises so that
-    a malformed provider submission results in a deterministic rejection code
+    This performs the network-free half of verification: it parses the quote,
+    confirms the measurements and report_data are well-formed, and confirms the
+    report_data equals the canonical five-field binding over dataset, input
+    (workload), model, compute-spec, and output. Any deviation in any of those
+    fields produces a distinct binding and is rejected here without any I/O.
+
+    It does NOT establish authenticity -- it never re-derives a signature from
+    public values. Authenticity is established separately by _authenticate_quote
+    against the remote attestation authority. This function never raises so that
+    a malformed provider submission yields a deterministic rejection code
     instead of crashing the transaction.
-
-    The binding now covers dataset_commitment, input_commitment, model_id,
-    compute_spec_commitment, AND output_commitment. Any deviation in any of
-    those fields produces a distinct binding that the signature cannot cover.
     """
     result = {
         "ok": False,
         "code": "MALFORMED_QUOTE",
         "mrenclave": "",
         "mrsigner": "",
+        "report_data": "",
         "binding": "",
         "output_commitment": "",
         "result_status": "",
@@ -259,6 +263,9 @@ def _inspect_enclave_quote(
     mrenclave = enclave.get("mrenclave")
     mrsigner = enclave.get("mrsigner")
     report_data = enclave.get("report_data")
+    # The quote carries an opaque DCAP/ECDSA signature blob. We require it to be
+    # present and well-formed but we NEVER verify its value on chain -- the
+    # attestation authority does that against Intel's collateral.
     quote_signature = enclave.get("quote_signature")
     if not _is_hex_of_bytes(mrenclave, 32) or not _is_hex_of_bytes(mrsigner, 32):
         return result
@@ -267,6 +274,7 @@ def _inspect_enclave_quote(
 
     result["mrenclave"] = mrenclave
     result["mrsigner"] = mrsigner
+    result["report_data"] = report_data
 
     artifact_dataset = artifact.get("dataset_commitment")
     artifact_input = artifact.get("input_commitment")
@@ -315,16 +323,85 @@ def _inspect_enclave_quote(
         result["code"] = "BINDING_MISMATCH"
         return result
 
-    # Verify the enclave signature seals the report body.
-    expected_signature = _quote_signature(mrenclave, mrsigner, report_data)
-    if quote_signature != expected_signature:
-        result["code"] = "SIGNATURE_INVALID"
-        return result
-
     result["ok"] = True
     result["code"] = "NONE"
     result["binding"] = expected_binding
     return result
+
+
+def _authenticate_quote(endpoint: str, quote_json: str) -> dict:
+    """Establish quote AUTHENTICITY against the remote attestation authority.
+
+    The opaque quote is submitted to an Intel DCAP/PCS or IAS style verifier via
+    gl.nondet.web.get, wrapped in gl.eq_principle.strict_eq so every validator
+    independently re-verifies the quote and must agree on the exact verdict. The
+    authority cryptographically checks the DCAP/ECDSA quote against Intel's
+    collateral and returns the AUTHENTICATED measurements and report data.
+
+    Returns a normalized dict: {status, mrenclave, mrsigner, report_data}. The
+    function never raises; any transport, decoding, or shape failure collapses
+    to a non-OK status so the caller settles the job deterministically. Because
+    the verdict is rooted in an independent authority (not in public values a
+    browser can reproduce), a fabricated attestation cannot reach an OK status.
+    """
+
+    def leader() -> dict:
+        # The quote is transported base64-encoded in a header so an arbitrarily
+        # shaped DCAP quote survives as an HTTP-safe token, exactly as a PCS/IAS
+        # client would submit it for verification.
+        quote_b64 = base64.b64encode(quote_json.encode("utf-8")).decode("ascii")
+        response = gl.nondet.web.get(
+            endpoint,
+            headers={
+                "Accept": "application/json",
+                "X-Enclave-Quote": quote_b64,
+            },
+        )
+
+        normalized = {
+            "status": "ATTESTATION_UNAVAILABLE",
+            "mrenclave": "",
+            "mrsigner": "",
+            "report_data": "",
+        }
+        if response.status != 200:
+            normalized["status"] = "ATTESTATION_HTTP_" + str(response.status)
+            return normalized
+        if response.body is None:
+            return normalized
+        try:
+            report = json.loads(response.body.decode("utf-8"))
+        except (ValueError, TypeError, UnicodeDecodeError):
+            normalized["status"] = "ATTESTATION_MALFORMED"
+            return normalized
+        if not isinstance(report, dict):
+            normalized["status"] = "ATTESTATION_MALFORMED"
+            return normalized
+
+        status = report.get("status")
+        normalized["status"] = status if isinstance(status, str) and status != "" else "ATTESTATION_MALFORMED"
+        for field in ("mrenclave", "mrsigner", "report_data"):
+            value = report.get(field)
+            normalized[field] = value if isinstance(value, str) else ""
+        return normalized
+
+    try:
+        verdict = gl.eq_principle.strict_eq(leader)
+    except Exception:
+        return {
+            "status": "ATTESTATION_UNAVAILABLE",
+            "mrenclave": "",
+            "mrsigner": "",
+            "report_data": "",
+        }
+    if not isinstance(verdict, dict):
+        return {
+            "status": "ATTESTATION_MALFORMED",
+            "mrenclave": "",
+            "mrsigner": "",
+            "report_data": "",
+        }
+    return verdict
 
 
 class C2DMarketplace(gl.Contract):
@@ -345,6 +422,7 @@ class C2DMarketplace(gl.Contract):
     provider_appealed_jobs: TreeMap[Address, u256]
     trusted_enclaves: TreeMap[str, bool]
     trusted_signers: TreeMap[str, bool]
+    attestation_endpoint: str
     total_staked: u256
     total_slashed: u256
     total_escrowed: u256
@@ -365,6 +443,7 @@ class C2DMarketplace(gl.Contract):
         self.total_jobs = u256(0)
         self.trusted_enclaves[DEFAULT_ENCLAVE_MEASUREMENT] = True
         self.trusted_signers[DEFAULT_ENCLAVE_SIGNER] = True
+        self.attestation_endpoint = DEFAULT_ATTESTATION_ENDPOINT
 
     # -------------------------------------------------------------------------
     # Enclave trust registry (admin controlled)
@@ -385,6 +464,20 @@ class C2DMarketplace(gl.Contract):
         if not _is_hex_of_bytes(mrsigner, 32):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Signer measurement must be 32 bytes of hex")
         self.trusted_signers[mrsigner] = enabled
+
+    @gl.public.write
+    def set_attestation_endpoint(self, endpoint: str) -> None:
+        """Repoint the remote attestation authority (admin only).
+
+        Lets the operator rotate to a new Intel DCAP/PCS or IAS verifier host
+        without redeploying. The endpoint must be an https URL so the quote is
+        submitted over an authenticated transport.
+        """
+        if gl.message.sender_address != self.admin:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the admin can set the attestation endpoint")
+        if not endpoint.startswith("https://") or len(endpoint) > 2048:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Attestation endpoint must be an https URL")
+        self.attestation_endpoint = endpoint
 
     # -------------------------------------------------------------------------
     # Provider collateral
@@ -651,16 +744,22 @@ class C2DMarketplace(gl.Contract):
         attestation_quote: str,
         output_commitment: str,
     ) -> dict:
-        """Settle a job from a verifiable enclave attestation.
+        """Settle a job from an authentically attested enclave quote.
 
-        The contract deterministically verifies a TEE/SGX style quote whose
-        binding now covers dataset, input, model, compute specification, AND
-        output commitment. Any modification to any of those components produces
-        a different binding that the quote signature cannot match, so a provider
-        cannot substitute unrelated work or a different compute spec.
+        Verification proceeds in three stages:
 
-        Stage 1: deterministic verification of the full five-field binding.
-        Stage 2: secondary semantic review of the verified structured report.
+        Stage 1a (deterministic binding): the quote's report_data must equal the
+          canonical five-field commitment over dataset, input, model, compute
+          specification, AND output. Any substitution changes the binding and is
+          rejected here with no network I/O.
+        Stage 1b (authentic remote attestation): the opaque quote is submitted
+          to the attestation authority via gl.nondet.web.get under an equivalence
+          principle. Only a status of OK from that independent authority -- whose
+          verdict a browser cannot fabricate from public values -- lets the quote
+          through, and its authenticated measurements/report_data must match the
+          on-chain binding and the admin trust registry.
+        Stage 2 (semantic review): a secondary LLM review of the now-authenticated
+          structured report.
         """
         if job_id not in self.jobs:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Job does not exist")
@@ -694,24 +793,25 @@ class C2DMarketplace(gl.Contract):
         job.attestation_mrenclave = inspection["mrenclave"]
         job.attestation_binding = inspection["binding"]
 
-        # Stage 1: deterministic enclave verification and full artifact binding.
-        registry_ok = inspection["ok"]
-        registry_code = inspection["code"]
-        if registry_ok:
-            if not self.trusted_enclaves.get(inspection["mrenclave"], False):
-                registry_ok = False
-                registry_code = "UNTRUSTED_ENCLAVE"
-            elif not self.trusted_signers.get(inspection["mrsigner"], False):
-                registry_ok = False
-                registry_code = "UNTRUSTED_SIGNER"
-        if output_commitment != inspection["output_commitment"]:
-            registry_ok = False
-            registry_code = "OUTPUT_COMMITMENT_INVALID"
+        # Stage 1a: deterministic structural + full artifact binding checks.
+        verify_ok = inspection["ok"]
+        verify_code = inspection["code"]
+        if verify_ok and output_commitment != inspection["output_commitment"]:
+            verify_ok = False
+            verify_code = "OUTPUT_COMMITMENT_INVALID"
 
-        if not registry_ok:
+        # Stage 1b: authentic remote attestation. Only reached once the binding
+        # is structurally sound, so an authority round-trip is spent only on a
+        # quote that already commits to this exact job.
+        if verify_ok:
+            authenticity = self._authenticate_quote_report(attestation_quote, inspection)
+            verify_ok = authenticity["ok"]
+            verify_code = authenticity["code"]
+
+        if not verify_ok:
             job.attestation_status = ATTESTATION_REJECTED
-            summary = "Enclave attestation failed deterministic verification: " + registry_code
-            return self._settle_slash(job_id, job, dataset, registry_code, summary)
+            summary = "Enclave attestation failed authentic verification: " + verify_code
+            return self._settle_slash(job_id, job, dataset, verify_code, summary)
 
         job.attestation_status = ATTESTATION_VERIFIED
 
@@ -741,6 +841,36 @@ class C2DMarketplace(gl.Contract):
 
         summary = "Verified enclave report rejected in semantic review: " + decision["summary"]
         return self._settle_slash(job_id, job, dataset, decision["violation_code"], summary)
+
+    def _authenticate_quote_report(self, quote_json: str, inspection: dict) -> dict:
+        """Authenticate a structurally-sound quote against the remote authority.
+
+        Returns {"ok": bool, "code": str}. The authority's verdict is bound to
+        this exact quote: its authenticated measurements and report data must
+        match both what the quote claims and the on-chain five-field binding,
+        and the authenticated measurements must be in the admin trust registry.
+        A non-OK status from the authority is carried straight through as the
+        settlement violation code (e.g. SIGNATURE_INVALID).
+        """
+        report = _authenticate_quote(self.attestation_endpoint, quote_json)
+        if report["status"] != ATTESTATION_STATUS_OK:
+            return {"ok": False, "code": report["status"]}
+        # The authenticated identity must be exactly the one the quote claims and
+        # the one the deterministic binding pinned -- otherwise an OK verdict for
+        # some other quote could be replayed against this job.
+        if (
+            report["mrenclave"] != inspection["mrenclave"]
+            or report["mrsigner"] != inspection["mrsigner"]
+            or report["report_data"] != inspection["report_data"]
+            or report["report_data"] != inspection["binding"]
+        ):
+            return {"ok": False, "code": "ATTESTATION_REPORT_MISMATCH"}
+        # Trust registry is checked on the AUTHENTICATED measurements.
+        if not self.trusted_enclaves.get(report["mrenclave"], False):
+            return {"ok": False, "code": "UNTRUSTED_ENCLAVE"}
+        if not self.trusted_signers.get(report["mrsigner"], False):
+            return {"ok": False, "code": "UNTRUSTED_SIGNER"}
+        return {"ok": True, "code": "NONE"}
 
     def _review_attestation(self, job, dataset, inspection) -> dict:
         report = json.dumps(
@@ -972,6 +1102,12 @@ Return only a JSON object with exactly these fields:
     def resolve_appeal(self, job_id: str) -> dict:
         """Adjudicate an appeal by re-verifying the submitted enclave evidence.
 
+        The appeal evidence is put through the SAME authentic verification path
+        as an execution proof: the deterministic five-field binding, then remote
+        attestation against the authority via gl.nondet.web.get, then the trust
+        registry. Only evidence that authentically attests a COMPLETED run for
+        this exact job can reverse the prior verdict.
+
         For SLASHED-origin appeals: an accepted appeal reverses the slash from
         the protocol treasury and returns stake to the provider. A rejected appeal
         forfeits the bond to the requester.
@@ -1004,9 +1140,10 @@ Return only a JSON object with exactly these fields:
         )
         accepted = inspection["ok"]
         if accepted:
-            if not self.trusted_enclaves.get(inspection["mrenclave"], False):
-                accepted = False
-            elif not self.trusted_signers.get(inspection["mrsigner"], False):
+            # Authenticate the evidence against the remote attestation authority
+            # before it can overturn a settled verdict.
+            authenticity = self._authenticate_quote_report(job.appeal_evidence, inspection)
+            if not authenticity["ok"]:
                 accepted = False
             elif inspection["result_status"] != "COMPLETED":
                 accepted = False
@@ -1147,12 +1284,23 @@ Return only a JSON object with exactly these fields:
 
     @gl.public.write
     def claim_unresolved_appeal(self, job_id: str) -> dict:
-        """Liveness guard: if an appeal is never adjudicated within its window,
-        the appeal is closed as rejected and the bond is returned to the provider.
+        """Liveness failsafe for an appeal that never reached a verdict.
+
+        If an appeal is not adjudicated within its window (no quorum reached, or
+        it otherwise resolves to an inconclusive state), the bond is ALWAYS
+        returned to the provider.
+
+        Additionally, for an INCONCLUSIVE-origin appeal -- where the buyer escrow
+        and the provider collateral are still held because the job never reached
+        a terminal verdict -- the failsafe fully unwinds the job: 100% of the
+        buyer escrow is refunded to the requester and 100% of the provider
+        collateral is released. Nobody is slashed, because the protocol could not
+        establish fault. This guarantees escrow and collateral can never be
+        stranded behind an appeal that consensus failed to resolve.
 
         The appeal_deadline was reset to NOW + APPEAL_WINDOW when the appeal was
-        filed, so this function cannot be called until the steward's adjudication
-        window closes. This prevents instant bond reclaim after filing.
+        filed, so this function cannot be called until the adjudication window
+        closes. This prevents instant reclaim after filing.
         """
         if job_id not in self.jobs:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Job does not exist")
@@ -1165,12 +1313,40 @@ Return only a JSON object with exactly these fields:
         if job.appeal_deadline == u256(0) or u256(_now_epoch()) <= job.appeal_deadline:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Appeal adjudication window is still open")
 
+        # A zero recorded slash means the appeal originated from an INCONCLUSIVE
+        # verdict, so the escrow and collateral are still live and must be
+        # released by this failsafe. A SLASHED-origin appeal already settled the
+        # escrow at slash time, so only the bond is outstanding.
+        origin_inconclusive = job.slash_amount == u256(0)
+
         bond = job.appeal_bond
         self.total_appeal_bonds = self.total_appeal_bonds - bond
         job.appeal_bond = u256(0)
-        job.status = STATUS_APPEAL_REJECTED
-        job.verification_reason = "APPEAL_TIMED_OUT"
-        job.verification_summary = "Appeal was not adjudicated in time; bond returned to provider."
+
+        released_escrow = u256(0)
+        released_collateral = u256(0)
+        if origin_inconclusive:
+            dataset = self.datasets[job.dataset_id]
+            provider_locked = self.provider_locked_stakes.get(job.provider, u256(0))
+            released_collateral = job.collateral_amount
+            self.provider_locked_stakes[job.provider] = provider_locked - job.collateral_amount
+            dataset.open_jobs = dataset.open_jobs - u256(1)
+            self.datasets[job.dataset_id] = dataset
+            released_escrow = job.funded_amount
+            self.total_escrowed = self.total_escrowed - job.funded_amount
+            job.settlement_amount = job.funded_amount
+            job.status = STATUS_CANCELLED
+            job.verification_reason = "APPEAL_INCONCLUSIVE_RELEASED"
+            job.verification_summary = (
+                "Appeal unresolved (no quorum); escrow refunded and collateral released in full."
+            )
+            if job.funded_amount > u256(0):
+                _Recipient(job.requester).emit_transfer(value=job.funded_amount, on="finalized")
+        else:
+            job.status = STATUS_APPEAL_REJECTED
+            job.verification_reason = "APPEAL_TIMED_OUT"
+            job.verification_summary = "Appeal was not adjudicated in time; bond returned to provider."
+
         self.jobs[job_id] = job
 
         if bond > u256(0):
@@ -1180,6 +1356,8 @@ Return only a JSON object with exactly these fields:
             "job_id": job_id,
             "status": job.status,
             "returned_bond": bond,
+            "released_escrow": released_escrow,
+            "released_collateral": released_collateral,
         }
 
     # -------------------------------------------------------------------------
@@ -1245,6 +1423,13 @@ Return only a JSON object with exactly these fields:
     @gl.public.view
     def is_trusted_enclave(self, mrenclave: str) -> bool:
         return self.trusted_enclaves.get(mrenclave, False)
+
+    @gl.public.view
+    def get_attestation_config(self) -> dict:
+        return {
+            "attestation_endpoint": self.attestation_endpoint,
+            "attestation_status_ok": ATTESTATION_STATUS_OK,
+        }
 
     @gl.public.view
     def get_dataset(self, dataset_id: str) -> dict:

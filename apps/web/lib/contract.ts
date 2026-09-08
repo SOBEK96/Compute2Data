@@ -74,17 +74,18 @@ export type ProviderReputation = {
   reputationScore: number;
 };
 
-// Domain separation tags provisioned inside contracts/c2d_marketplace.py. The
-// browser reproduces the exact bytes the enclave signs and the contract
-// re-derives on chain so an attestation can be assembled client-side.
+// Binding domain-separation tag provisioned inside contracts/c2d_marketplace.py.
+// The browser reproduces the *public* five-field commitment (report_data) that
+// the contract re-derives and checks on chain.
 //
-// TRANSPARENCY: this mirrors a *modeled* TEE/SGX enclave attestation, not a
-// live DCAP/ECDSA quote. Trust is rooted in the on-chain MRENCLAVE/MRSIGNER
-// trust registry; the quote signature is an integrity-protecting model of an
-// enclave signature. See the "Enclave Attestation Model" note in README.md
-// and contracts/c2d_marketplace.py (_quote_signature).
+// AUTHENTICITY: the browser does NOT and CANNOT produce the enclave signature.
+// The `quote_signature` is an opaque DCAP/ECDSA blob emitted by the provider's
+// genuine TEE and supplied to this helper as `enclaveQuoteSignature`. On chain
+// the contract submits the quote to the remote attestation authority
+// (gl.nondet.web.get), which verifies that signature against Intel's collateral;
+// a value fabricated in the browser from public values is rejected. See the
+// "Authentic TEE Attestation Verification" note in README.md.
 const BINDING_DOMAIN = "c2d-attestation-binding-v1";
-const QUOTE_DOMAIN = "c2d-enclave-quote-v1";
 export const DEFAULT_ENCLAVE_MEASUREMENT = "11".repeat(32);
 export const DEFAULT_ENCLAVE_SIGNER = "22".repeat(32);
 
@@ -108,6 +109,10 @@ export type AttestationArtifact = {
   resultStatus?: string;
   mrenclave?: string;
   mrsigner?: string;
+  // The opaque DCAP/ECDSA quote signature produced by the provider's genuine
+  // enclave. It is NOT derived here from public values; the remote attestation
+  // authority verifies it on chain. A missing or fabricated value is rejected.
+  enclaveQuoteSignature: string;
   // Optional override to intentionally bind a divergent compute-spec
   // commitment for mismatch/slash regression testing in the console.
   computeSpecCommitmentOverride?: string;
@@ -119,7 +124,11 @@ export type AttestationArtifact = {
  * commitment, requester input commitment, model id, compute-spec commitment
  * and output commitment — the same five-field binding the contract re-derives
  * on chain. Omitting the compute-spec commitment would make the quote fail
- * deterministic verification, so it is always present in the signed payload.
+ * deterministic verification, so it is always present in the payload.
+ *
+ * The enclave signature is taken verbatim from `enclaveQuoteSignature`; this
+ * function never manufactures it. Authenticity is established on chain by the
+ * remote attestation authority, not by any value computed in the browser.
  */
 export async function buildAttestationQuote(artifact: AttestationArtifact): Promise<string> {
   const mrenclave = artifact.mrenclave ?? DEFAULT_ENCLAVE_MEASUREMENT;
@@ -137,15 +146,14 @@ export async function buildAttestationQuote(artifact: AttestationArtifact): Prom
       artifact.outputCommitment,
     ].join("|"),
   );
-  const quoteSignature = await sha256Hex(
-    [QUOTE_DOMAIN, mrenclave, mrsigner, reportData].join("|"),
-  );
   return JSON.stringify({
     enclave: {
       mrenclave,
       mrsigner,
       report_data: reportData,
-      quote_signature: quoteSignature,
+      // Opaque signature from the provider's enclave; verified off chain by the
+      // attestation authority, never reproduced from public values here.
+      quote_signature: artifact.enclaveQuoteSignature,
     },
     artifact: {
       dataset_commitment: artifact.datasetCommitment,

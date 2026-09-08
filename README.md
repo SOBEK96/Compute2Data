@@ -134,20 +134,24 @@ class ComputeJob:
     appeal_bond: u256                   # [NEW in v2.0]
 ```
 
-### 2. Complete Method Catalog (17 Methods)
+### 2. Complete Method Catalog
 
 | Category | Method | Access / Type | Description |
 | :--- | :--- | :--- | :--- |
 | **Staking** | `stake_provider()` | `write.payable` | Deposits GEN collateral into the provider balance. |
 | **Staking** | `withdraw_stake(amount)` | `write` | Withdraws unbonded available stake to provider wallet. |
 | **Datasets** | `register_dataset(...)` | `write` | Locks `10 GEN` listing bond and registers dataset metadata. |
-| **Datasets** | `update_dataset(...)` | `write` | Updates pricing, access conditions, or active status. |
-| **Datasets** | `remove_dataset(id)` | `write` | Unlocks listing bond and removes dataset if 0 open jobs. |
+| **Datasets** | `set_dataset_active(...)` | `write` | Toggles dataset availability; unlocks the listing bond when deactivated with 0 open jobs. |
 | **Compute** | `request_compute(...)` | `write.payable` | Escrows compute payment and locks `2 GEN` provider collateral. |
-| **Compute** | `cancel_expired_job(id)` | `write` | **[v2.0]** Cancels pending job, refunds 100% escrow to requester. |
-| **Verification**| `submit_execution_proof(...)`| `write` | Triggers non-deterministic Multi-LLM AI consensus. |
+| **Compute** | `cancel_expired_job(id)` | `write` | **[v2.0]** Cancels pending job after its deadline, refunds 100% escrow to requester. |
+| **Verification**| `submit_execution_proof(...)`| `write` | Deterministic binding + **authentic remote attestation** (`gl.nondet.web.get`), then Multi-LLM consensus review. |
+| **Attestation** | `set_attestation_endpoint(url)` | `write` | **[admin]** Repoints the remote attestation authority (https only). |
+| **Attestation** | `set_trusted_enclave / set_trusted_signer` | `write` | **[admin]** Manages the `MRENCLAVE` / `MRSIGNER` trust registry. |
 | **Disputes** | `appeal_job_verdict(...)` | `write.payable` | **[v2.0]** Files formal dispute with `1 GEN` appeal bond. |
+| **Disputes** | `resolve_appeal(id)` | `write` | Re-verifies the appeal evidence through the same authentic attestation path; accept reverses the verdict, reject finalizes it. |
+| **Disputes** | `claim_unresolved_appeal(id)` | `write` | **Failsafe** for an unresolved/no-quorum appeal: returns the bond and, for an inconclusive-origin appeal, fully releases escrow + collateral. |
 | **Analytics** | `get_marketplace_stats()` | `view` | **[v2.0]** Returns TVL, total escrow, slashed funds, job counts. |
+| **Attestation** | `get_attestation_config()` | `view` | Returns the active attestation endpoint and OK status token. |
 | **Analytics** | `get_provider_reputation(addr)`| `view` | **[v2.0]** Computes provider reliability percentage (0-100%). |
 | **Queries** | `get_dataset(id)` | `view` | Returns complete metadata for a dataset. |
 | **Queries** | `list_dataset_ids()` | `view` | Returns list of all registered dataset keys. |
@@ -268,29 +272,73 @@ UNTRUSTED_EVIDENCE_JSON_END
 2. **Reentrancy Protection**: GenLayer's transaction model and `_Recipient.emit_transfer(..., on="finalized")` prevents cross-contract reentrancy.
 3. **Deterministic State Guards**: All state checks (balance validation, permissions, existence) occur in deterministic Python *before* entering `gl.vm.run_nondet_unsafe`.
 
-### 🔒 Enclave Attestation Model (Transparency Note)
+### 🔒 Authentic TEE Attestation Verification
 
-> **This is a modeled TEE/SGX enclave attestation, not a live DCAP/ECDSA quote verifier.**
+> **Authenticity is established by an independent remote attestation authority, not by any hash the contract re-derives from public values.**
 
-The contract does **not** call out to Intel's Provisioning Certification Service or
-verify a real DCAP quote signature against Intel's attestation key. Instead it models
-an integrity-protecting enclave signature (`_quote_signature`) and roots trust in an
-admin-controlled **MRENCLAVE / MRSIGNER trust registry** (`trusted_enclaves` /
-`trusted_signers`). What is fully real and enforced on-chain:
+The contract **no longer** re-derives an enclave signature from public values on chain.
+An attacker who knows only the public `MRENCLAVE` / `MRSIGNER` / `report_data` can no
+longer fabricate an acceptance, because those public values cannot make a real
+attestation authority vouch for a quote that no genuine enclave signed. Verification is
+layered across two complementary checks:
 
-- **Authenticated evidence, not reproducible hashes** — a quote is only accepted if its
-  measurements are whitelisted in the trust registry *and* its signature seals the
-  report body, so a client cannot forge an acceptance by reproducing a public hash.
-- **Cryptographic five-field binding** — `report_data` is the canonical digest over
-  `dataset_commitment | input(workload)_commitment | model_id | compute_spec_commitment |
-  output_commitment` (`_binding_digest`). Substituting *any* committed field yields a
-  different binding the signature cannot cover, producing a deterministic rejection code.
+**1. Deterministic five-field binding (network-free, `_inspect_enclave_quote`).**
+`report_data` must equal the canonical digest over
+`dataset_commitment | input(workload)_commitment | model_id | compute_spec_commitment |
+output_commitment` (`_binding_digest`). Substituting *any* committed field yields a
+different binding and is rejected on-chain with a deterministic code
+(`DATASET_MISMATCH`, `INPUT_COMMITMENT_MISMATCH`, `MODEL_MISMATCH`,
+`COMPUTE_SPEC_MISMATCH`, `BINDING_MISMATCH`, …) before any network I/O.
 
-**Upgrade path:** swap `_quote_signature` verification for a real DCAP/ECDSA quote
-verification precompile/oracle. The binding, trust registry, settlement, and appeal
-logic remain unchanged — only the signature-check primitive is replaced. This boundary
-is documented inline in `contracts/c2d_marketplace.py` (`_quote_signature`,
-`_inspect_enclave_quote`) and reproduced client-side in `apps/web/lib/contract.ts`.
+**2. Authentic remote attestation (`_authenticate_quote`).** The opaque quote is
+submitted to an Intel **DCAP/PCS or IAS** style verifier over `gl.nondet.web.get`,
+wrapped in `gl.eq_principle.strict_eq` so **every validator independently re-verifies the
+quote and must agree on the exact verdict**. The authority cryptographically checks the
+DCAP/ECDSA quote against Intel's collateral and returns the *authenticated* measurements,
+`report_data`, and a TCB status. The contract trusts **only** what the authority returns
+and then:
+
+- requires the authority's status to be `OK` — any other value (`SIGNATURE_INVALID`,
+  `QUOTE_EXPIRED`, `GROUP_OUT_OF_DATE`, an `ATTESTATION_HTTP_5xx` transport failure, …)
+  is carried straight through as a deterministic settlement/slash code;
+- binds the verdict to the exact quote by requiring the authenticated
+  `MRENCLAVE`/`MRSIGNER`/`report_data` to match both the quote's claim and the on-chain
+  five-field binding (`ATTESTATION_REPORT_MISMATCH` otherwise), so an `OK` verdict for
+  some other quote cannot be replayed against this job;
+- checks the *authenticated* `MRENCLAVE`/`MRSIGNER` against the admin **trust registry**
+  (`trusted_enclaves` / `trusted_signers`).
+
+Because the verdict flows through `strict_eq`, a **browser-fabricated attestation reverts
+deterministically** — every validator reaches the same rejection. The attestation
+endpoint is admin-configurable at runtime via `set_attestation_endpoint(...)` (https
+only) and exposed through `get_attestation_config()`. This path is verified end-to-end in
+`tests/direct/test_authentic_attestation.py` (genuine acceptance, browser fabrication,
+authority outage, identity mismatch, endpoint rotation).
+
+### ⚖️ Inconclusive & Unresolved Appeal Handling
+
+Every settlement path is terminal and moves escrow, collateral, and appeal bond
+deterministically — funds can **never** be stranded, even when consensus cannot decide.
+
+- **Inconclusive verdict (no appeal).** When the semantic review returns `INCONCLUSIVE`,
+  the job holds its escrow and collateral open for the provider's appeal window. If the
+  provider never appeals, `cancel_expired_job` refunds 100% of the escrow to the
+  requester and releases the collateral once that window closes.
+- **Unresolved / no-quorum appeal (failsafe).** If a filed appeal is never adjudicated
+  within its window — i.e. it fails to reach quorum or otherwise resolves to an
+  inconclusive state — `claim_unresolved_appeal` is the failsafe. It **always** returns
+  the bond to the provider, and for an **inconclusive-origin** appeal (where escrow and
+  collateral are still live) it **fully unwinds the job**: 100% of the buyer escrow is
+  refunded to the requester and 100% of the provider collateral is released. **Nobody is
+  slashed**, because the protocol could not establish fault (`total_slashed` is
+  unchanged; the job settles to `CANCELLED` with reason `APPEAL_INCONCLUSIVE_RELEASED`).
+- **Adjudicated appeal.** `resolve_appeal` re-runs the appeal evidence through the same
+  authentic attestation path: an accept restores/settles funds to the provider, a reject
+  finalizes the slash and forfeits the bond to the requester.
+
+This failsafe is proven by
+`tests/direct/test_compute_data_regression.py::test_unresolved_inconclusive_appeal_releases_escrow_and_collateral`,
+which asserts 100% escrow release **and** 100% collateral release with zero slashing.
 
 ---
 

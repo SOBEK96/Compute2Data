@@ -607,6 +607,76 @@ def test_unadjudicated_appeal_times_out_and_returns_bond(
     assert contract.get_marketplace_stats()["total_appeal_bonds"] == 0
 
 
+def test_unresolved_inconclusive_appeal_releases_escrow_and_collateral(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """Failsafe: an INCONCLUSIVE-origin appeal that consensus never resolves must
+    fully unwind the job. Simulate an inconclusive verdict, an appeal on it, and
+    an adjudication window that closes with no quorum. Assert 100% of the buyer
+    escrow is refunded to the requester and 100% of the provider collateral is
+    unlocked/refundable, with no slash and nothing stranded."""
+    contract = direct_deploy(CONTRACT_PATH)
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    # Drive the job to an INCONCLUSIVE verdict: escrow and collateral stay live.
+    direct_vm.mock_llm(r".*security validator settling.*", inconclusive_assessment())
+    direct_vm.sender = direct_alice
+    contract.submit_execution_proof(
+        "job-001",
+        build_attestation_quote(result_status="PENDING"),
+        OUTPUT_COMMITMENT,
+    )
+
+    stats_inconclusive = contract.get_marketplace_stats()
+    assert stats_inconclusive["total_escrowed"] == JOB_PRICE  # escrow still held
+    assert contract.get_job("job-001")["status"] == "INCONCLUSIVE"
+
+    # Provider appeals the inconclusive verdict, posting a bond.
+    direct_vm.sender = direct_alice
+    direct_vm.value = ONE_GEN
+    contract.appeal_job_verdict(
+        "job-001",
+        "Appealing the inconclusive verdict; awaiting adjudication.",
+        build_attestation_quote(result_status="COMPLETED"),
+    )
+    direct_vm.value = 0
+
+    # The adjudication window closes with no quorum: the appeal is unresolved.
+    warp(direct_vm, future_iso(days=4))
+    direct_vm.sender = direct_alice
+    result = contract.claim_unresolved_appeal("job-001")
+
+    job = contract.get_job("job-001")
+    provider = contract.get_provider(address_hex(direct_alice))
+    dataset = contract.get_dataset("mobility-v1")
+    stats = contract.get_marketplace_stats()
+
+    # 100% of the buyer escrow is released back to the requester.
+    assert result["released_escrow"] == JOB_PRICE
+    assert job["settlement_amount"] == JOB_PRICE
+    assert stats["total_escrowed"] == 0
+
+    # 100% of the provider collateral is unlocked (and the bond is returned).
+    assert result["released_collateral"] == JOB_COLLATERAL
+    assert result["returned_bond"] == ONE_GEN
+    assert stats["total_appeal_bonds"] == 0
+
+    # No fault was established, so nothing is slashed and the full stake is free.
+    assert job["slash_amount"] == 0
+    assert stats["total_slashed"] == 0
+    assert provider["slashed_stake"] == 0
+    assert provider["total_stake"] == DATASET_STAKE + (2 * JOB_COLLATERAL)
+    # Only the dataset listing bond remains locked; the job collateral is freed.
+    assert provider["locked_stake"] == DATASET_STAKE
+    assert provider["available_stake"] == 2 * JOB_COLLATERAL
+
+    # The job is fully unwound: no dangling open-job accounting.
+    assert job["status"] == "CANCELLED"
+    assert job["verification_reason"] == "APPEAL_INCONCLUSIVE_RELEASED"
+    assert dataset["open_jobs"] == 0
+
+
 # =============================================================================
 # 4. PRODUCTION ENVIRONMENT ISOLATION
 #    Reserved demo / mock / test id prefixes are blocked from live writes.
