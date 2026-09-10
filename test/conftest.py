@@ -1,9 +1,16 @@
-import base64 as _base64
 import datetime as _dt
 import hashlib
 import json
 
 import pytest
+
+from dcap_fixtures import (
+    DEFAULT_FMSPC,
+    assert_pinned_keys_match,
+    build_binary_quote,
+    expected_report_data,
+    tcb_collateral_handler,
+)
 
 
 ONE_GEN = 10**18
@@ -11,21 +18,18 @@ DATASET_STAKE = 10 * ONE_GEN
 JOB_COLLATERAL = 2 * ONE_GEN
 JOB_PRICE = 3 * ONE_GEN
 
-# These mirror the domain tags and default measurements provisioned inside
-# contracts/c2d_marketplace.py so tests reproduce the exact attestation bytes.
-BINDING_DOMAIN = "c2d-attestation-binding-v1"
-# QUOTE_DOMAIN lives ONLY in the test harness now: it is the signing scheme of
-# the *simulated* attestation authority (see _attestation_authority below), not
-# of the contract. The contract no longer re-derives any signature from public
-# values -- it trusts the authority's verdict. Keeping the scheme here models a
-# genuine enclave signing its quote and an Intel-rooted PCS/IAS verifier
-# checking it off chain.
-QUOTE_DOMAIN = "c2d-enclave-quote-v1"
+# Default measurements provisioned inside contracts/c2d_marketplace.py, mirrored
+# here so the fixtures reproduce the exact bytes the contract parses and the
+# measurements the contract whitelists.
 DEFAULT_ENCLAVE_MEASUREMENT = "11" * 32
 DEFAULT_ENCLAVE_SIGNER = "22" * 32
 
 # Must match DEFAULT_ATTESTATION_ENDPOINT in contracts/c2d_marketplace.py.
-ATTESTATION_ENDPOINT = "https://attestation.compute2data.network/dcap/v1/verify-quote"
+ATTESTATION_ENDPOINT = "https://api.trustedservices.intel.com/sgx/certification/v4/tcb"
+
+# The dataset_id fund_job registers the job against; the report_data binding is
+# sha256(dataset_id + compute_spec_hash + output_data_hash).
+DATASET_ID = "mobility-v1"
 
 DATASET_COMMITMENT = "sha256:dataset-commitment-4a1c"
 INPUT_COMMITMENT = "sha256:input-commitment-77f0"
@@ -61,33 +65,9 @@ def warp(direct_vm, iso_ts: str) -> None:
             msg_raw['datetime'] = iso_ts
 
 
-def _binding_digest(
-    dataset_commitment,
-    input_commitment,
-    model_id,
-    compute_spec_commitment,
-    output_commitment,
-):
-    payload = "|".join(
-        [
-            BINDING_DOMAIN,
-            dataset_commitment,
-            input_commitment,
-            model_id,
-            compute_spec_commitment,
-            output_commitment,
-        ]
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _quote_signature(mrenclave, mrsigner, report_data):
-    body = "|".join([QUOTE_DOMAIN, mrenclave, mrsigner, report_data])
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
-
-
 def build_attestation_quote(
     *,
+    dataset_id=DATASET_ID,
     dataset_commitment=DATASET_COMMITMENT,
     input_commitment=INPUT_COMMITMENT,
     model_id=MODEL_ID,
@@ -98,45 +78,41 @@ def build_attestation_quote(
     result_status="COMPLETED",
     tamper_signature=False,
     drop_compute_spec_commitment=False,
+    fmspc=DEFAULT_FMSPC,
 ):
-    """Build a well-formed attestation quote JSON string.
+    """Build a genuine binary DCAP quote wrapped with its artifact, as JSON.
 
-    tamper_signature=True: zero the signature (SIGNATURE_INVALID path).
-    drop_compute_spec_commitment=True: omit the field from the artifact
+    The measurements and report_data live in the signed binary report body; the
+    report_data is the canonical sha256(dataset_id + compute_spec_hash +
+    output_data_hash) that the contract re-derives on chain. The quote is signed
+    with real ECDSA P-256 keys whose PCK chain terminates at the pinned root.
+
+    tamper_signature=True: zero the ISV report signature (SIGNATURE_INVALID path).
+    drop_compute_spec_commitment=True: omit the artifact field
         (COMPUTE_SPEC_COMMITMENT_INVALID path).
     """
     compute_spec_commitment = hashlib.sha256(compute_spec.encode("utf-8")).hexdigest()
-    report_data = _binding_digest(
-        dataset_commitment,
-        input_commitment,
-        model_id,
-        compute_spec_commitment,
-        output_commitment,
+    output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
+    report_data = expected_report_data(dataset_id, compute_spec_commitment, output_data_hash)
+    dcap_quote = build_binary_quote(
+        mrenclave=mrenclave,
+        mrsigner=mrsigner,
+        report_data=report_data,
+        fmspc=fmspc,
+        tamper_signature=tamper_signature,
     )
-    signature = _quote_signature(mrenclave, mrsigner, report_data)
-    if tamper_signature:
-        signature = "00" * 32
     artifact = {
+        "dataset_id": dataset_id,
         "dataset_commitment": dataset_commitment,
         "input_commitment": input_commitment,
         "model_id": model_id,
         "output_commitment": output_commitment,
+        "output_data_hash": output_data_hash,
         "result_status": result_status,
     }
     if not drop_compute_spec_commitment:
         artifact["compute_spec_commitment"] = compute_spec_commitment
-    return json.dumps(
-        {
-            "enclave": {
-                "mrenclave": mrenclave,
-                "mrsigner": mrsigner,
-                "report_data": report_data,
-                "quote_signature": signature,
-            },
-            "artifact": artifact,
-        },
-        sort_keys=True,
-    )
+    return json.dumps({"artifact": artifact, "dcap_quote": dcap_quote}, sort_keys=True)
 
 
 def build_attestation_quote_with_binding_mismatch(
@@ -145,110 +121,59 @@ def build_attestation_quote_with_binding_mismatch(
     mrsigner=DEFAULT_ENCLAVE_SIGNER,
     output_commitment=OUTPUT_COMMITMENT,
 ):
-    """Quote where report_data does not match the five-field canonical binding.
+    """Quote whose report_data does not match the canonical binding.
 
-    All artifact fields are correct but report_data is derived from a different
-    output, so expected_binding != report_data (BINDING_MISMATCH). The signature
-    is internally valid for the corrupted report_data so SIGNATURE_INVALID is
-    not reached first.
+    The artifact fields are all correct, but the signed report_data is derived
+    from a different output, so the contract's re-derived binding != report_data
+    (BINDING_MISMATCH). The DCAP signature chain is internally valid for the
+    sealed report_data, so SIGNATURE_INVALID is not reached first.
     """
     compute_spec_commitment = hashlib.sha256(COMPUTE_SPEC.encode("utf-8")).hexdigest()
-    wrong_output = "sha256:binding-mismatch-decoy-output"
-    fake_binding = _binding_digest(
-        DATASET_COMMITMENT, INPUT_COMMITMENT, MODEL_ID, compute_spec_commitment, wrong_output
+    output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
+    decoy_output_hash = hashlib.sha256(b"sha256:binding-mismatch-decoy-output").hexdigest()
+    # report_data is bound to the decoy output, but the artifact advertises the
+    # real output; the contract binds over the real output and detects the gap.
+    report_data = expected_report_data(DATASET_ID, compute_spec_commitment, decoy_output_hash)
+    dcap_quote = build_binary_quote(
+        mrenclave=mrenclave,
+        mrsigner=mrsigner,
+        report_data=report_data,
     )
-    signature = _quote_signature(mrenclave, mrsigner, fake_binding)
-    return json.dumps(
-        {
-            "enclave": {
-                "mrenclave": mrenclave,
-                "mrsigner": mrsigner,
-                "report_data": fake_binding,
-                "quote_signature": signature,
-            },
-            "artifact": {
-                "dataset_commitment": DATASET_COMMITMENT,
-                "input_commitment": INPUT_COMMITMENT,
-                "model_id": MODEL_ID,
-                "compute_spec_commitment": compute_spec_commitment,
-                "output_commitment": output_commitment,
-                "result_status": "COMPLETED",
-            },
-        },
-        sort_keys=True,
-    )
-
-
-def _verify_quote_authenticity(quote_json):
-    """Simulate the remote attestation authority's cryptographic verdict.
-
-    This is the crypto that moved OUT of the contract: an Intel DCAP/PCS or IAS
-    verifier checks the enclave's signature over the report body and returns the
-    AUTHENTICATED measurements and report data. A quote whose signature does not
-    seal (mrenclave, mrsigner, report_data) is rejected as SIGNATURE_INVALID --
-    which is exactly what defeats a browser that only knows the public values.
-    """
-    try:
-        parsed = json.loads(quote_json)
-        enclave = parsed["enclave"]
-        mrenclave = enclave["mrenclave"]
-        mrsigner = enclave["mrsigner"]
-        report_data = enclave["report_data"]
-        signature = enclave["quote_signature"]
-    except (ValueError, TypeError, KeyError):
-        return {"status": "ATTESTATION_MALFORMED", "mrenclave": "", "mrsigner": "", "report_data": ""}
-
-    if signature != _quote_signature(mrenclave, mrsigner, report_data):
-        return {"status": "SIGNATURE_INVALID", "mrenclave": "", "mrsigner": "", "report_data": ""}
-    return {
-        "status": "OK",
-        "mrenclave": mrenclave,
-        "mrsigner": mrsigner,
-        "report_data": report_data,
+    artifact = {
+        "dataset_id": DATASET_ID,
+        "dataset_commitment": DATASET_COMMITMENT,
+        "input_commitment": INPUT_COMMITMENT,
+        "model_id": MODEL_ID,
+        "compute_spec_commitment": compute_spec_commitment,
+        "output_commitment": output_commitment,
+        "output_data_hash": output_data_hash,
+        "result_status": "COMPLETED",
     }
-
-
-def _attestation_authority(data):
-    """Live web handler standing in for the remote attestation service.
-
-    Reads the base64 quote the contract submits in the X-Enclave-Quote header,
-    runs the authority's cryptographic verification, and returns a JSON verdict
-    in the gltest live-handler response shape.
-    """
-    headers = data.get("headers", {}) or {}
-    quote_b64 = headers.get("X-Enclave-Quote", "")
-    if isinstance(quote_b64, (bytes, bytearray)):
-        quote_b64 = bytes(quote_b64).decode("ascii", "replace")
-    try:
-        quote_json = _base64.b64decode(quote_b64).decode("utf-8")
-    except (ValueError, TypeError, UnicodeDecodeError):
-        quote_json = ""
-
-    verdict = _verify_quote_authenticity(quote_json)
-    body = json.dumps(verdict).encode("utf-8")
-    return {"ok": {"response": {"status": 200, "headers": {}, "body": body}}}
+    return json.dumps({"artifact": artifact, "dcap_quote": dcap_quote}, sort_keys=True)
 
 
 def install_attestation_authority(direct_vm):
-    """Install the simulated attestation authority as the live web handler.
+    """Install the simulated Intel PCS collateral service as the live web handler.
 
-    Every submit_execution_proof / resolve_appeal reaches the authority via
-    gl.nondet.web.get; this makes genuine quotes verify and fabricated ones
-    revert, with no per-test mock wiring. A test can override authenticity by
-    registering an explicit direct_vm.mock_web(ATTESTATION_ENDPOINT, ...), which
-    takes precedence over this fallback handler.
+    Every submit_execution_proof / resolve_appeal fetches TCB collateral for the
+    quote's FMSPC via gl.nondet.web.get; this handler returns an authentically
+    signed UpToDate status. The contract verifies that signature on chain against
+    its pinned Intel TCB signing key, so authenticity does not come from the
+    endpoint. A test can override the collateral by registering an explicit
+    direct_vm.mock_web(...), which takes precedence over this fallback handler.
     """
-    direct_vm._live_web_handler = _attestation_authority
+    direct_vm._live_web_handler = tcb_collateral_handler
 
 
 @pytest.fixture(autouse=True)
 def _attestation_authority_autouse(direct_vm):
-    """Make the attestation authority reachable for every direct-mode test.
+    """Make the collateral service reachable for every direct-mode test.
 
     Installed unconditionally so a test that stands up its own provider (without
-    stake_and_register) still reaches a working authority. Registering an
-    explicit mock_web for the endpoint still overrides this fallback.
+    stake_and_register) still reaches a working collateral service. Registering
+    an explicit mock_web for the endpoint still overrides this fallback.
     """
+    assert_pinned_keys_match()
     install_attestation_authority(direct_vm)
     return direct_vm
 

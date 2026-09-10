@@ -195,10 +195,10 @@ export function ProviderConsole() {
   const [datasetCommitment, setDatasetCommitment] = useState("sha256:credit-graph-commitment-2026-v3");
   const [outputCommitment, setOutputCommitment] = useState("sha256:gnn-embeddings-final-weights-verified");
   const [resultStatus, setResultStatus] = useState("COMPLETED");
-  // Opaque DCAP/ECDSA signature emitted by the provider's genuine enclave. The
-  // browser never derives this; it is verified on chain by the attestation
-  // authority. Left blank it will be rejected as an unauthenticated quote.
-  const [enclaveSignature, setEnclaveSignature] = useState("");
+  // The genuine binary DCAP quote (hex) emitted by the provider's enclave. The
+  // browser never derives this; it is parsed and its ECDSA chain verified on
+  // chain. Left blank it is rejected as an unparseable/unauthenticated quote.
+  const [enclaveQuoteHex, setEnclaveQuoteHex] = useState("");
   const [tamperModel, setTamperModel] = useState(false);
   const [proofAction, setProofAction] = useState<ActionState>({ phase: "idle" });
   const [appealAction, setAppealAction] = useState<ActionState>({ phase: "idle" });
@@ -298,7 +298,7 @@ export function ProviderConsole() {
         computeSpec: selectedJob.computeSpec,
         outputCommitment: outputCommitment.trim(),
         resultStatus,
-        enclaveQuoteSignature: enclaveSignature.trim(),
+        dcapQuoteHex: enclaveQuoteHex.trim(),
       });
       await submitExecutionProof(account, {
         jobId: selectedJob.jobId,
@@ -327,7 +327,7 @@ export function ProviderConsole() {
         computeSpec: selectedJob.computeSpec,
         outputCommitment: outputCommitment.trim(),
         resultStatus: "COMPLETED",
-        enclaveQuoteSignature: enclaveSignature.trim(),
+        dcapQuoteHex: enclaveQuoteHex.trim(),
       });
       await appealJobVerdict(account, {
         jobId: selectedJob.jobId,
@@ -790,12 +790,12 @@ export function ProviderConsole() {
               </div>
               <div className="md:col-span-2">
                 <label className="label-caps block text-[9px] text-muted">
-                  Enclave Quote Signature (from your TEE — verified by the attestation authority)
+                  Binary DCAP Quote — hex (from your TEE — parsed &amp; ECDSA-verified on chain)
                 </label>
                 <input
-                  value={enclaveSignature}
-                  onChange={(e) => setEnclaveSignature(e.target.value)}
-                  placeholder="Paste the DCAP/ECDSA signature emitted by your enclave"
+                  value={enclaveQuoteHex}
+                  onChange={(e) => setEnclaveQuoteHex(e.target.value)}
+                  placeholder="Paste the hex-encoded binary DCAP quote emitted by your enclave"
                   className="field mt-1 font-mono text-xs"
                 />
               </div>

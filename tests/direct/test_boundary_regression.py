@@ -2,18 +2,18 @@
 
 This suite locks in every domain-specific threshold and bracket boundary by
 calling the contract's module-level pure helper functions directly, WITHOUT a
-per-test VM fixture. The helpers under test (_is_hex_of_bytes, _binding_digest,
-_inspect_enclave_quote, _validate_production_id) depend only on hashlib / json
-and never touch VM storage or nondeterminism, so exercising them in-process runs
-in well under a millisecond each and pins the exact boundary at which each
-threshold flips.
+per-test VM fixture. The helpers under test (_is_hex_of_bytes, _parse_dcap_quote,
+_expected_report_data, _inspect_enclave_quote, _validate_production_id) depend
+only on hashlib / json and never touch VM storage or nondeterminism, so
+exercising them in-process runs in well under a millisecond each and pins the
+exact boundary at which each threshold flips.
 
-Authenticity of a quote is NOT decided here: the contract no longer re-derives a
-signature from public values on chain. _inspect_enclave_quote only performs the
-deterministic structural + five-field binding checks; signature authenticity is
-established off chain by the remote attestation authority (exercised in
-test_authentic_attestation.py). Accordingly this suite asserts that a
-structurally sound quote with any well-formed signature passes inspection.
+Signature authenticity is NOT decided here: _inspect_enclave_quote performs the
+deterministic structural parse + artifact + report_data binding checks; the
+ECDSA signature chain is verified separately by _verify_quote_signature_chain
+(exercised in test_authentic_attestation.py). Accordingly this suite builds
+genuine binary DCAP quotes and asserts that a structurally sound quote with a
+correct binding passes inspection regardless of signature verification.
 
 The contract module is imported once (module-scoped fixture) using the same SDK
 loader the direct plugin uses; the imported module object is held for the whole
@@ -23,6 +23,7 @@ from sys.modules during its own teardown.
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,14 @@ import pytest
 
 
 CONTRACT_PATH = "contracts/c2d_marketplace.py"
+
+# Make the primary test/ dir importable so we can reuse the DCAP quote packer.
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PRIMARY_TEST_DIR = os.path.join(_ROOT, "test")
+if _PRIMARY_TEST_DIR not in sys.path:
+    sys.path.insert(0, _PRIMARY_TEST_DIR)
+
+from dcap_fixtures import build_binary_quote, expected_report_data  # noqa: E402
 
 # Trusted default measurements provisioned by the contract at deploy time.
 MRENCLAVE = "11" * 32
@@ -76,9 +85,13 @@ def c2d():
     wasi_mock.clear_vm()
 
 
+def _spec_commitment(spec: str) -> str:
+    return hashlib.sha256(spec.encode("utf-8")).hexdigest()
+
+
 def _valid_quote(
-    module,
     *,
+    dataset_id="did",
     dataset_commitment="dc",
     input_commitment="ic",
     model_id="mid",
@@ -88,61 +101,50 @@ def _valid_quote(
     mrsigner=MRSIGNER,
     result_status="COMPLETED",
     include_compute_spec=True,
-    malformed_signature=False,
     tamper_binding=False,
+    malformed_quote=False,
 ):
-    """Build a quote JSON string using the module's own binding helper.
+    """Build a genuine binary DCAP quote wrapped with its artifact, as JSON.
 
-    Reusing the contract's _binding_digest guarantees the report_data reproduces
-    the exact bytes the contract re-derives, so a boundary result reflects the
-    contract logic and not a divergent test re-implementation. The signature is
-    an opaque blob the contract does not verify on chain (only its 32-byte-hex
-    shape is checked), so we synthesize a well-formed placeholder.
+    The report_data is the canonical sha256(dataset_id + compute_spec_hash +
+    output_data_hash) the contract re-derives, so a boundary result reflects the
+    contract logic and not a divergent re-implementation. tamper_binding binds
+    report_data to a different output (BINDING_MISMATCH); malformed_quote
+    replaces the binary quote with unparseable bytes (MALFORMED_QUOTE).
     """
-    compute_spec_commitment = hashlib.sha256(compute_spec.encode("utf-8")).hexdigest()
-    report_data = module._binding_digest(
-        dataset_commitment,
-        input_commitment,
-        model_id,
-        compute_spec_commitment,
-        output_commitment,
-    )
+    compute_spec_commitment = _spec_commitment(compute_spec)
+    output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
     if tamper_binding:
-        # Well-formed hex that does not equal the canonical five-field binding.
-        report_data = module._binding_digest(
-            dataset_commitment,
-            input_commitment,
-            model_id,
-            compute_spec_commitment,
-            output_commitment + "-decoy",
+        decoy = hashlib.sha256((output_commitment + "-decoy").encode("utf-8")).hexdigest()
+        report_data = expected_report_data(dataset_id, compute_spec_commitment, decoy)
+    else:
+        report_data = expected_report_data(dataset_id, compute_spec_commitment, output_data_hash)
+
+    if malformed_quote:
+        dcap_quote = "not-a-valid-hex-quote"
+    else:
+        dcap_quote = build_binary_quote(
+            mrenclave=mrenclave, mrsigner=mrsigner, report_data=report_data
         )
-    # Opaque, well-formed 32-byte-hex signature placeholder (not verified here).
-    signature = hashlib.sha256(
-        (mrenclave + mrsigner + report_data).encode("utf-8")
-    ).hexdigest()
-    if malformed_signature:
-        # Not 32 bytes of hex: must fail the structural shape check.
-        signature = "00" * 8
+
     artifact = {
+        "dataset_id": dataset_id,
         "dataset_commitment": dataset_commitment,
         "input_commitment": input_commitment,
         "model_id": model_id,
         "output_commitment": output_commitment,
+        "output_data_hash": output_data_hash,
         "result_status": result_status,
     }
     if include_compute_spec:
         artifact["compute_spec_commitment"] = compute_spec_commitment
-    return json.dumps(
-        {
-            "enclave": {
-                "mrenclave": mrenclave,
-                "mrsigner": mrsigner,
-                "report_data": report_data,
-                "quote_signature": signature,
-            },
-            "artifact": artifact,
-        },
-        sort_keys=True,
+    return json.dumps({"artifact": artifact, "dcap_quote": dcap_quote}, sort_keys=True)
+
+
+def _inspect(c2d, quote, *, dataset_id="did", dataset_commitment="dc", input_c="ic",
+             model="mid", spec="spec"):
+    return c2d._inspect_enclave_quote(
+        quote, dataset_id, dataset_commitment, input_c, model, _spec_commitment(spec)
     )
 
 
@@ -187,15 +189,15 @@ def test_is_hex_of_bytes_rejects_non_strings(c2d, non_string):
     ],
 )
 def test_output_commitment_length_bracket(c2d, length, expect_ok, expect_code):
-    quote = _valid_quote(c2d, output_commitment="o" * length)
-    result = c2d._inspect_enclave_quote(quote, "dc", "ic", "mid", _spec_commitment("spec"))
+    quote = _valid_quote(output_commitment="o" * length)
+    result = _inspect(c2d, quote)
     assert result["ok"] is expect_ok
     assert result["code"] == expect_code
 
 
 def test_empty_output_commitment_is_invalid(c2d):
-    quote = _valid_quote(c2d, output_commitment="")
-    result = c2d._inspect_enclave_quote(quote, "dc", "ic", "mid", _spec_commitment("spec"))
+    quote = _valid_quote(output_commitment="")
+    result = _inspect(c2d, quote)
     assert result["ok"] is False
     assert result["code"] == "OUTPUT_COMMITMENT_INVALID"
 
@@ -204,34 +206,31 @@ def test_empty_output_commitment_is_invalid(c2d):
 # _inspect_enclave_quote: deterministic rejection codes for every tampered field
 # =============================================================================
 
-def _spec_commitment(spec: str) -> str:
-    return hashlib.sha256(spec.encode("utf-8")).hexdigest()
-
-
 @pytest.mark.parametrize(
     "quote_kwargs, on_chain, expect_code",
     [
         # A fully consistent quote verifies.
-        ({}, ("dc", "ic", "mid", "spec"), "NONE"),
-        # Each committed field bound into the quote must match the on-chain value.
-        ({}, ("OTHER", "ic", "mid", "spec"), "DATASET_MISMATCH"),
-        ({}, ("dc", "OTHER", "mid", "spec"), "INPUT_COMMITMENT_MISMATCH"),
-        ({}, ("dc", "ic", "OTHER", "spec"), "MODEL_MISMATCH"),
+        ({}, ("did", "dc", "ic", "mid", "spec"), "NONE"),
+        # Each committed artifact field must match the on-chain value.
+        ({}, ("did", "OTHER", "ic", "mid", "spec"), "DATASET_MISMATCH"),
+        ({}, ("did", "dc", "OTHER", "mid", "spec"), "INPUT_COMMITMENT_MISMATCH"),
+        ({}, ("did", "dc", "ic", "OTHER", "spec"), "MODEL_MISMATCH"),
         # A quote built for a different compute spec fails the spec commitment check.
-        ({}, ("dc", "ic", "mid", "different-spec"), "COMPUTE_SPEC_MISMATCH"),
+        ({}, ("did", "dc", "ic", "mid", "different-spec"), "COMPUTE_SPEC_MISMATCH"),
         # Omitting the mandatory compute-spec commitment is rejected outright.
-        ({"include_compute_spec": False}, ("dc", "ic", "mid", "spec"), "COMPUTE_SPEC_COMMITMENT_INVALID"),
-        # A malformed (wrong-length) signature blob fails the structural check;
-        # a forged binding is caught by the five-field digest comparison.
-        ({"malformed_signature": True}, ("dc", "ic", "mid", "spec"), "MALFORMED_QUOTE"),
-        ({"tamper_binding": True}, ("dc", "ic", "mid", "spec"), "BINDING_MISMATCH"),
+        ({"include_compute_spec": False}, ("did", "dc", "ic", "mid", "spec"), "COMPUTE_SPEC_COMMITMENT_INVALID"),
+        # An unparseable binary quote fails the structural check; a forged binding
+        # is caught by the re-derived report_data comparison.
+        ({"malformed_quote": True}, ("did", "dc", "ic", "mid", "spec"), "MALFORMED_QUOTE"),
+        ({"tamper_binding": True}, ("did", "dc", "ic", "mid", "spec"), "BINDING_MISMATCH"),
     ],
 )
 def test_inspection_rejection_codes(c2d, quote_kwargs, on_chain, expect_code):
-    dataset, input_c, model, spec = on_chain
-    quote = _valid_quote(c2d, **quote_kwargs)
-    result = c2d._inspect_enclave_quote(
-        quote, dataset, input_c, model, _spec_commitment(spec)
+    dataset_id, dataset, input_c, model, spec = on_chain
+    quote = _valid_quote(**quote_kwargs)
+    result = _inspect(
+        c2d, quote, dataset_id=dataset_id, dataset_commitment=dataset,
+        input_c=input_c, model=model, spec=spec,
     )
     assert result["code"] == expect_code
     assert result["ok"] is (expect_code == "NONE")
@@ -240,47 +239,58 @@ def test_inspection_rejection_codes(c2d, quote_kwargs, on_chain, expect_code):
 @pytest.mark.parametrize("malformed", ["", "not json", "{", "[]", '"a string"', "42", "null"])
 def test_malformed_quote_never_verifies(c2d, malformed):
     """A non-object or unparseable quote is rejected deterministically, never raising."""
-    result = c2d._inspect_enclave_quote(malformed, "dc", "ic", "mid", _spec_commitment("spec"))
+    result = _inspect(c2d, malformed)
     assert result["ok"] is False
     assert result["code"] == "MALFORMED_QUOTE"
 
 
 # =============================================================================
-# _binding_digest / _quote_signature: determinism and domain separation
+# _expected_report_data: determinism and full-field coverage
 # =============================================================================
 
-def test_binding_digest_is_deterministic_and_hex32(c2d):
-    a = c2d._binding_digest("d", "i", "m", "c", "o")
-    b = c2d._binding_digest("d", "i", "m", "c", "o")
+def test_expected_report_data_is_deterministic_and_64_bytes(c2d):
+    csc = _spec_commitment("spec")
+    odh = hashlib.sha256(b"oc").hexdigest()
+    a = c2d._expected_report_data("did", csc, odh)
+    b = c2d._expected_report_data("did", csc, odh)
     assert a == b
-    assert c2d._is_hex_of_bytes(a, 32)
+    assert isinstance(a, (bytes, bytearray)) and len(a) == 64
+    # The digest occupies the first 32 bytes; the rest is zero padding.
+    assert a[32:] == b"\x00" * 32
 
 
-@pytest.mark.parametrize("field_index", [0, 1, 2, 3, 4])
-def test_binding_digest_changes_when_any_field_changes(c2d, field_index):
-    """Every one of the five bound fields must influence the digest, so no
-    component of the committed work can be swapped without detection."""
-    base = ["d", "i", "m", "c", "o"]
+@pytest.mark.parametrize("field_index", [0, 1, 2])
+def test_expected_report_data_changes_when_any_field_changes(c2d, field_index):
+    """Every one of the three bound fields (dataset_id, compute_spec_hash,
+    output_data_hash) must influence the report_data, so no component of the
+    committed work can be swapped without detection."""
+    base = ["did", _spec_commitment("spec"), hashlib.sha256(b"oc").hexdigest()]
     mutated = list(base)
-    mutated[field_index] = base[field_index] + "-changed"
-    assert c2d._binding_digest(*base) != c2d._binding_digest(*mutated)
+    if field_index == 0:
+        mutated[0] = base[0] + "-changed"
+    else:
+        # Perturb a hash field while keeping it valid 32-byte hex.
+        mutated[field_index] = hashlib.sha256(base[field_index].encode()).hexdigest()
+    assert c2d._expected_report_data(*base) != c2d._expected_report_data(*mutated)
 
 
-def test_inspect_does_not_authenticate_signature(c2d):
-    """The contract no longer re-derives a signature from public values: a quote
-    with an arbitrary but well-formed signature still passes structural + binding
-    inspection. Authenticity is delegated to the remote attestation authority."""
-    arbitrary_sig = "ab" * 32
-    quote = _valid_quote(c2d)
-    parsed = json.loads(quote)
-    parsed["enclave"]["quote_signature"] = arbitrary_sig
-    result = c2d._inspect_enclave_quote(
-        json.dumps(parsed, sort_keys=True), "dc", "ic", "mid", _spec_commitment("spec")
-    )
+def test_inspect_does_not_verify_signature(c2d):
+    """_inspect_enclave_quote performs only the deterministic structural + binding
+    checks; the ECDSA signature chain is verified separately. A structurally
+    sound quote with a correct binding therefore passes inspection, and the
+    module exposes no legacy on-chain signature re-derivation helpers."""
+    quote = _valid_quote()
+    result = _inspect(c2d, quote)
     assert result["ok"] is True
     assert result["code"] == "NONE"
-    # And the module exposes no on-chain signature re-derivation helper anymore.
+    # The legacy SHA-256 "signature" construction is gone for good.
     assert not hasattr(c2d, "_quote_signature")
+    assert not hasattr(c2d, "_binding_digest")
+    assert not hasattr(c2d, "_authenticate_quote")
+    # Real ECDSA verification and binary DCAP parsing are present instead.
+    assert hasattr(c2d, "_ecdsa_verify")
+    assert hasattr(c2d, "_parse_dcap_quote")
+    assert hasattr(c2d, "_verify_quote_signature_chain")
 
 
 # =============================================================================

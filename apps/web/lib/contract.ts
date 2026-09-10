@@ -74,18 +74,17 @@ export type ProviderReputation = {
   reputationScore: number;
 };
 
-// Binding domain-separation tag provisioned inside contracts/c2d_marketplace.py.
-// The browser reproduces the *public* five-field commitment (report_data) that
-// the contract re-derives and checks on chain.
+// Default measurements provisioned inside contracts/c2d_marketplace.py, exposed
+// for display. The contract recovers the real MRENCLAVE/MRSIGNER from the signed
+// binary quote; these are only the admin-whitelisted defaults.
 //
-// AUTHENTICITY: the browser does NOT and CANNOT produce the enclave signature.
-// The `quote_signature` is an opaque DCAP/ECDSA blob emitted by the provider's
-// genuine TEE and supplied to this helper as `enclaveQuoteSignature`. On chain
-// the contract submits the quote to the remote attestation authority
-// (gl.nondet.web.get), which verifies that signature against Intel's collateral;
-// a value fabricated in the browser from public values is rejected. See the
-// "Authentic TEE Attestation Verification" note in README.md.
-const BINDING_DOMAIN = "c2d-attestation-binding-v1";
+// AUTHENTICITY: the browser does NOT and CANNOT produce a genuine DCAP quote.
+// The binary quote is emitted by the provider's real TEE (it carries the sealed
+// report_data and the full ECDSA signature chain) and supplied to this helper
+// verbatim as `dcapQuoteHex`. On chain the contract parses that binary quote,
+// re-derives the report_data binding, and verifies the ECDSA chain up to the
+// pinned Intel SGX Root CA; a value fabricated in the browser is rejected. See
+// the "Authentic SGX/DCAP Attestation Verification" note in README.md.
 export const DEFAULT_ENCLAVE_MEASUREMENT = "11".repeat(32);
 export const DEFAULT_ENCLAVE_SIGNER = "22".repeat(32);
 
@@ -102,67 +101,45 @@ export type AttestationArtifact = {
   inputCommitment: string;
   modelId: string;
   // Raw compute specification string as stored on-chain for the job. The
-  // commitment sealed into the quote is derived from this exactly as the
-  // contract does (sha256 of the spec), so provider and chain agree.
+  // commitment cross-checked against the quote is derived from this exactly as
+  // the contract does (sha256 of the spec), so provider and chain agree.
   computeSpec: string;
   outputCommitment: string;
   resultStatus?: string;
-  mrenclave?: string;
-  mrsigner?: string;
-  // The opaque DCAP/ECDSA quote signature produced by the provider's genuine
-  // enclave. It is NOT derived here from public values; the remote attestation
-  // authority verifies it on chain. A missing or fabricated value is rejected.
-  enclaveQuoteSignature: string;
-  // Optional override to intentionally bind a divergent compute-spec
+  // The genuine binary DCAP quote (hex) emitted by the provider's TEE. It
+  // carries the measurements, the sealed report_data, and the full ECDSA
+  // signature chain. This function never manufactures it; a missing or
+  // fabricated value is rejected on chain.
+  dcapQuoteHex: string;
+  // Optional override to intentionally cross a divergent compute-spec
   // commitment for mismatch/slash regression testing in the console.
   computeSpecCommitmentOverride?: string;
 };
 
 /**
- * Assemble a TEE/SGX style enclave attestation quote whose report data
- * cryptographically binds the produced artifact to the exact dataset
- * commitment, requester input commitment, model id, compute-spec commitment
- * and output commitment — the same five-field binding the contract re-derives
- * on chain. Omitting the compute-spec commitment would make the quote fail
- * deterministic verification, so it is always present in the payload.
- *
- * The enclave signature is taken verbatim from `enclaveQuoteSignature`; this
- * function never manufactures it. Authenticity is established on chain by the
- * remote attestation authority, not by any value computed in the browser.
+ * Wrap the provider's genuine binary DCAP quote with the cleartext artifact the
+ * contract cross-checks against the on-chain job. The report_data binding and
+ * the ECDSA signature chain live inside `dcapQuoteHex` (sealed by the enclave);
+ * this function only assembles the transport envelope — it never fabricates any
+ * cryptographic material. Authenticity is established entirely on chain.
  */
 export async function buildAttestationQuote(artifact: AttestationArtifact): Promise<string> {
-  const mrenclave = artifact.mrenclave ?? DEFAULT_ENCLAVE_MEASUREMENT;
-  const mrsigner = artifact.mrsigner ?? DEFAULT_ENCLAVE_SIGNER;
   const resultStatus = artifact.resultStatus ?? "COMPLETED";
   const computeSpecCommitment =
     artifact.computeSpecCommitmentOverride ?? (await sha256Hex(artifact.computeSpec));
-  const reportData = await sha256Hex(
-    [
-      BINDING_DOMAIN,
-      artifact.datasetCommitment,
-      artifact.inputCommitment,
-      artifact.modelId,
-      computeSpecCommitment,
-      artifact.outputCommitment,
-    ].join("|"),
-  );
+  const outputDataHash = await sha256Hex(artifact.outputCommitment);
   return JSON.stringify({
-    enclave: {
-      mrenclave,
-      mrsigner,
-      report_data: reportData,
-      // Opaque signature from the provider's enclave; verified off chain by the
-      // attestation authority, never reproduced from public values here.
-      quote_signature: artifact.enclaveQuoteSignature,
-    },
     artifact: {
       dataset_commitment: artifact.datasetCommitment,
       input_commitment: artifact.inputCommitment,
       model_id: artifact.modelId,
       compute_spec_commitment: computeSpecCommitment,
       output_commitment: artifact.outputCommitment,
+      output_data_hash: outputDataHash,
       result_status: resultStatus,
     },
+    // The real binary quote from the provider's enclave, verified on chain.
+    dcap_quote: artifact.dcapQuoteHex,
   });
 }
 

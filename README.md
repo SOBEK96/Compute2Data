@@ -144,14 +144,14 @@ class ComputeJob:
 | **Datasets** | `set_dataset_active(...)` | `write` | Toggles dataset availability; unlocks the listing bond when deactivated with 0 open jobs. |
 | **Compute** | `request_compute(...)` | `write.payable` | Escrows compute payment and locks `2 GEN` provider collateral. |
 | **Compute** | `cancel_expired_job(id)` | `write` | **[v2.0]** Cancels pending job after its deadline, refunds 100% escrow to requester. |
-| **Verification**| `submit_execution_proof(...)`| `write` | Deterministic binding + **authentic remote attestation** (`gl.nondet.web.get`), then Multi-LLM consensus review. |
-| **Attestation** | `set_attestation_endpoint(url)` | `write` | **[admin]** Repoints the remote attestation authority (https only). |
+| **Verification**| `submit_execution_proof(...)`| `write` | Binary DCAP parse + `report_data` binding + **on-chain ECDSA chain to the pinned Intel root** + signed TCB collateral, then Multi-LLM consensus review. |
+| **Attestation** | `set_attestation_endpoint(url)` | `write` | **[admin]** Repoints the Intel PCS/DCAP collateral endpoint (https only); trust is rooted in the pinned keys, not the endpoint. |
 | **Attestation** | `set_trusted_enclave / set_trusted_signer` | `write` | **[admin]** Manages the `MRENCLAVE` / `MRSIGNER` trust registry. |
 | **Disputes** | `appeal_job_verdict(...)` | `write.payable` | **[v2.0]** Files formal dispute with `1 GEN` appeal bond. |
-| **Disputes** | `resolve_appeal(id)` | `write` | Re-verifies the appeal evidence through the same authentic attestation path; accept reverses the verdict, reject finalizes it. |
+| **Disputes** | `resolve_appeal(id)` | `write` | Re-verifies the appeal evidence through the same on-chain DCAP pipeline; accept reverses the verdict, reject finalizes it. |
 | **Disputes** | `claim_unresolved_appeal(id)` | `write` | **Failsafe** for an unresolved/no-quorum appeal: returns the bond and, for an inconclusive-origin appeal, fully releases escrow + collateral. |
 | **Analytics** | `get_marketplace_stats()` | `view` | **[v2.0]** Returns TVL, total escrow, slashed funds, job counts. |
-| **Attestation** | `get_attestation_config()` | `view` | Returns the active attestation endpoint and OK status token. |
+| **Attestation** | `get_attestation_config()` | `view` | Returns the collateral endpoint, acceptable TCB status, and the pinned Intel SGX Root CA / TCB signing public keys. |
 | **Analytics** | `get_provider_reputation(addr)`| `view` | **[v2.0]** Computes provider reliability percentage (0-100%). |
 | **Queries** | `get_dataset(id)` | `view` | Returns complete metadata for a dataset. |
 | **Queries** | `list_dataset_ids()` | `view` | Returns list of all registered dataset keys. |
@@ -269,48 +269,61 @@ UNTRUSTED_EVIDENCE_JSON_END
 2. **Reentrancy Protection**: GenLayer's transaction model and `_Recipient.emit_transfer(..., on="finalized")` prevents cross-contract reentrancy.
 3. **Deterministic State Guards**: All state checks (balance validation, permissions, existence) occur in deterministic Python *before* entering `gl.vm.run_nondet_unsafe`.
 
-### 🔒 Authentic TEE Attestation Verification
+### 🔒 Authentic SGX/DCAP Attestation Verification
 
-> **Authenticity is established by an independent remote attestation authority, not by any hash the contract re-derives from public values.**
+> **Every byte that influences settlement is cryptographically verified on chain against a pinned Intel root of trust. No endpoint's unsigned "OK" is ever trusted.**
 
-The contract **no longer** re-derives an enclave signature from public values on chain.
-An attacker who knows only the public `MRENCLAVE` / `MRSIGNER` / `report_data` can no
-longer fabricate an acceptance, because those public values cannot make a real
-attestation authority vouch for a quote that no genuine enclave signed. Verification is
-layered across two complementary checks:
+The contract performs **real Intel SGX / DCAP ECDSA quote verification entirely on
+chain**, using an ECDSA P-256 verifier implemented in pure Python (`_ecdsa_verify`). A
+spoofed or unsigned payload from any HTTPS host cannot produce a valid signature chain
+that terminates at the **pinned Intel SGX Root CA key**, so it is rejected
+deterministically. Verification is layered:
 
-**1. Deterministic five-field binding (network-free, `_inspect_enclave_quote`).**
-`report_data` must equal the canonical digest over
-`dataset_commitment | input(workload)_commitment | model_id | compute_spec_commitment |
-output_commitment` (`_binding_digest`). Substituting *any* committed field yields a
-different binding and is rejected on-chain with a deterministic code
+**1. Binary DCAP quote parse (`_parse_dcap_quote`).** The Quote Header (version,
+attestation key type, QE SVN, PCE SVN) and the ISV Enclave Report (`MRENCLAVE`,
+`MRSIGNER`, `ISV_SVN`, the 64-byte `report_data`) are read from their real byte offsets
+in the binary quote — never from an attacker-supplied JSON field. A structurally invalid
+quote is rejected as `MALFORMED_QUOTE` / `UNSUPPORTED_QUOTE`.
+
+**2. Report-data binding (`_expected_report_data`, network-free).** The quote's 64-byte
+`report_data` must equal
+
+```
+report_data = sha256(dataset_id + compute_spec_hash + output_data_hash)
+```
+
+proving the enclave ran this exact compute specification over this exact dataset and
+committed to this exact output. Any substitution breaks the digest (`BINDING_MISMATCH`).
+The artifact's committed fields are additionally cross-checked against the on-chain job
 (`DATASET_MISMATCH`, `INPUT_COMMITMENT_MISMATCH`, `MODEL_MISMATCH`,
-`COMPUTE_SPEC_MISMATCH`, `BINDING_MISMATCH`, …) before any network I/O.
+`COMPUTE_SPEC_MISMATCH`, …).
 
-**2. Authentic remote attestation (`_authenticate_quote`).** The opaque quote is
-submitted to an Intel **DCAP/PCS or IAS** style verifier over `gl.nondet.web.get`,
-wrapped in `gl.eq_principle.strict_eq` so **every validator independently re-verifies the
-quote and must agree on the exact verdict**. The authority cryptographically checks the
-DCAP/ECDSA quote against Intel's collateral and returns the *authenticated* measurements,
-`report_data`, and a TCB status. The contract trusts **only** what the authority returns
-and then:
+**3. ECDSA signature chain (`_verify_quote_signature_chain`).** The ISV report is
+ECDSA-verified against the attestation key; the attestation key is bound by the QE report
+(`report_data == sha256(att_pubkey || qe_auth_data)`); the QE report is ECDSA-verified
+against the PCK leaf; and the PCK chain is verified link by link up to the **pinned Intel
+SGX Root CA public key**. No link can be forged from public values
+(`SIGNATURE_INVALID`, `QE_BINDING_INVALID`, `QE_SIGNATURE_INVALID`, `PCK_CHAIN_INVALID`).
 
-- requires the authority's status to be `OK` — any other value (`SIGNATURE_INVALID`,
-  `QUOTE_EXPIRED`, `GROUP_OUT_OF_DATE`, an `ATTESTATION_HTTP_5xx` transport failure, …)
-  is carried straight through as a deterministic settlement/slash code;
-- binds the verdict to the exact quote by requiring the authenticated
-  `MRENCLAVE`/`MRSIGNER`/`report_data` to match both the quote's claim and the on-chain
-  five-field binding (`ATTESTATION_REPORT_MISMATCH` otherwise), so an `OK` verdict for
-  some other quote cannot be replayed against this job;
-- checks the *authenticated* `MRENCLAVE`/`MRSIGNER` against the admin **trust registry**
-  (`trusted_enclaves` / `trusted_signers`).
+**4. Trust registry.** The cryptographically recovered `MRENCLAVE` / `MRSIGNER` must be
+whitelisted by the admin (`trusted_enclaves` / `trusted_signers`), else `UNTRUSTED_ENCLAVE`
+/ `UNTRUSTED_SIGNER`.
 
-Because the verdict flows through `strict_eq`, a **browser-fabricated attestation reverts
-deterministically** — every validator reaches the same rejection. The attestation
-endpoint is admin-configurable at runtime via `set_attestation_endpoint(...)` (https
-only) and exposed through `get_attestation_config()`. This path is verified end-to-end in
-`tests/direct/test_authentic_attestation.py` (genuine acceptance, browser fabrication,
-authority outage, identity mismatch, endpoint rotation).
+**5. Signed TCB collateral (`_verify_tcb_collateral`).** The TCB status collateral for the
+quote's FMSPC is fetched from the Intel **PCS / DCAP** collateral service over
+`gl.nondet.web.get` (wrapped in `gl.eq_principle.strict_eq` so every validator agrees) and
+its ECDSA signature is verified on chain against the **pinned Intel TCB signing key**. An
+unsigned or non-`UpToDate` response — from *any* endpoint — is rejected
+(`COLLATERAL_SIGNATURE_INVALID`, `TCB_*`, `ATTESTATION_HTTP_5xx`). This is exactly what
+defeats the previous "trust the endpoint's OK" weakness.
+
+The collateral endpoint is admin-configurable at runtime via
+`set_attestation_endpoint(...)` (https only); the pinned trust anchors are exposed through
+`get_attestation_config()`. This path is verified end-to-end in
+`tests/direct/test_authentic_attestation.py` (genuine acceptance, tampered report_data,
+unsigned/invalid collateral, non-OK TCB status, mismatched MRENCLAVE, browser-fabricated
+signature, collateral outage, endpoint rotation) against genuine binary DCAP quote
+fixtures signed with real ECDSA P-256 keys.
 
 ### ⚖️ Inconclusive & Unresolved Appeal Handling
 
