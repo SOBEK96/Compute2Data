@@ -1,13 +1,22 @@
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
 
 import datetime
 import hashlib
 import json
 from dataclasses import dataclass
 
-from genlayer import *
+import genlayer as gl
+from genlayer.storage import DynArray, TreeMap, allow as allow_storage
+from genlayer.types import Address, u256
 
 
+# GenVM contract target: v0.3.0 on the py-genlayer 5jycge runner (StudioNet, chain
+# 61999). This uses the v0.3.0 SDK idiom: `import genlayer as gl`, the storage
+# decorator `@gl.storage.allow` (imported here as `allow_storage`), the base class
+# `gl.contract.Contract`, and Lazy nondet results (web.get / strict_eq return a
+# Lazy that is resolved with .get()). The runner is pinned on line 1 as the leading
+# comment the GenVM host parses as the runner expression; a version pragma must NOT
+# precede it there or the host reports "runner malformed".
 ERROR_EXPECTED = "[EXPECTED]"
 ERROR_LLM = "[LLM_ERROR]"
 ONE_GEN = 1_000_000_000_000_000_000
@@ -190,7 +199,7 @@ def _now_epoch() -> int:
     optional timeout paths but never blocks the liveness-fallback cancel path.
     """
     try:
-        raw = gl.message_raw
+        raw = gl.message.raw
         stamp = raw["datetime"] if "datetime" in raw else ""
     except (KeyError, TypeError):
         return 0
@@ -586,10 +595,11 @@ def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
 
     def leader() -> dict:
         url = endpoint + ("&" if "?" in endpoint else "?") + "fmspc=" + fmspc
+        # web.get returns a Lazy[Response] in the v0.3.0 SDK; resolve it with .get().
         response = gl.nondet.web.get(
             url,
             headers={"Accept": "application/json"},
-        )
+        ).get()
         if response.status != 200:
             return {"ok": False, "code": "ATTESTATION_HTTP_" + str(response.status)}
         if response.body is None:
@@ -623,7 +633,8 @@ def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
         return {"ok": True, "code": "NONE"}
 
     try:
-        verdict = gl.eq_principle.strict_eq(leader)
+        # strict_eq returns a Lazy in the v0.3.0 SDK; resolve it with .get().
+        verdict = gl.eq_principle.strict_eq(leader).get()
     except Exception:
         return {"ok": False, "code": "ATTESTATION_UNAVAILABLE"}
     if not isinstance(verdict, dict) or "ok" not in verdict or "code" not in verdict:
@@ -631,7 +642,7 @@ def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
     return verdict
 
 
-class C2DMarketplace(gl.Contract):
+class C2DMarketplace(gl.contract.Contract):
     admin: Address
     datasets: TreeMap[str, Dataset]
     dataset_ids: DynArray[str]
@@ -735,7 +746,7 @@ class C2DMarketplace(gl.Contract):
 
         self.provider_stakes[provider] = total - amount
         self.total_staked = self.total_staked - amount
-        _Recipient(provider).emit_transfer(value=amount, on="finalized")
+        _Recipient(provider).emit_transfer(amount)
 
     # -------------------------------------------------------------------------
     # Datasets
@@ -956,7 +967,7 @@ class C2DMarketplace(gl.Contract):
         job.verification_reason = "CANCELLED"
         job.verification_summary = "Job cancelled after deadline expiry; escrow refunded, collateral released."
         self.jobs[job_id] = job
-        _Recipient(job.requester).emit_transfer(value=job.funded_amount, on="finalized")
+        _Recipient(job.requester).emit_transfer(job.funded_amount)
 
         return {
             "job_id": job_id,
@@ -1200,7 +1211,7 @@ Return only a JSON object with exactly these fields:
                 and leader_data["violation_code"] == validator_data["violation_code"]
             )
 
-        return gl.vm.run_nondet_unsafe(assess_report, validate_assessment)
+        return gl.vm.run_nondet(assess_report, validate_assessment)
 
     def _settle_payout(self, job_id: str, job, dataset) -> dict:
         provider_locked = self.provider_locked_stakes.get(job.provider, u256(0))
@@ -1216,7 +1227,7 @@ Return only a JSON object with exactly these fields:
         )
         self.datasets[job.dataset_id] = dataset
         self.jobs[job_id] = job
-        _Recipient(job.provider).emit_transfer(value=job.funded_amount, on="finalized")
+        _Recipient(job.provider).emit_transfer(job.funded_amount)
 
         return {
             "job_id": job_id,
@@ -1266,7 +1277,7 @@ Return only a JSON object with exactly these fields:
         dataset.listing_bond = u256(0)
         self.datasets[job.dataset_id] = dataset
         self.jobs[job_id] = job
-        _Recipient(job.requester).emit_transfer(value=job.funded_amount, on="finalized")
+        _Recipient(job.requester).emit_transfer(job.funded_amount)
 
         return {
             "job_id": job_id,
@@ -1428,7 +1439,7 @@ Return only a JSON object with exactly these fields:
             )
             job.settlement_amount = job.funded_amount
             if job.funded_amount > u256(0):
-                _Recipient(job.provider).emit_transfer(value=job.funded_amount, on="finalized")
+                _Recipient(job.provider).emit_transfer(job.funded_amount)
 
         job.status = STATUS_APPEAL_ACCEPTED
         job.verified = True
@@ -1441,7 +1452,7 @@ Return only a JSON object with exactly these fields:
         self.datasets[job.dataset_id] = dataset
 
         if bond > u256(0):
-            _Recipient(job.provider).emit_transfer(value=bond, on="finalized")
+            _Recipient(job.provider).emit_transfer(bond)
 
         return {
             "job_id": job_id,
@@ -1501,14 +1512,14 @@ Return only a JSON object with exactly these fields:
 
             # Refund requester the escrowed job fee.
             if job.funded_amount > u256(0):
-                _Recipient(job.requester).emit_transfer(value=job.funded_amount, on="finalized")
+                _Recipient(job.requester).emit_transfer(job.funded_amount)
 
         self.jobs[job_id] = job
 
         # Forfeit the appeal bond to the requester (SLASHED or INCONCLUSIVE path).
         if bond > u256(0):
             self.total_slashed = self.total_slashed + bond
-            _Recipient(job.requester).emit_transfer(value=bond, on="finalized")
+            _Recipient(job.requester).emit_transfer(bond)
 
         return {
             "job_id": job_id,
@@ -1575,7 +1586,7 @@ Return only a JSON object with exactly these fields:
                 "Appeal unresolved (no quorum); escrow refunded and collateral released in full."
             )
             if job.funded_amount > u256(0):
-                _Recipient(job.requester).emit_transfer(value=job.funded_amount, on="finalized")
+                _Recipient(job.requester).emit_transfer(job.funded_amount)
         else:
             job.status = STATUS_APPEAL_REJECTED
             job.verification_reason = "APPEAL_TIMED_OUT"
@@ -1584,7 +1595,7 @@ Return only a JSON object with exactly these fields:
         self.jobs[job_id] = job
 
         if bond > u256(0):
-            _Recipient(job.provider).emit_transfer(value=bond, on="finalized")
+            _Recipient(job.provider).emit_transfer(bond)
 
         return {
             "job_id": job_id,
