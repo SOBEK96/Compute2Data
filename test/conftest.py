@@ -63,6 +63,17 @@ def warp(direct_vm, iso_ts: str) -> None:
         msg_raw = getattr(sys.modules['genlayer.gl'], 'message_raw', None)
         if isinstance(msg_raw, dict):
             msg_raw['datetime'] = iso_ts
+    for mod_name in ['genlayer.message', 'genlayer']:
+        if mod_name in sys.modules:
+            mod = sys.modules[mod_name]
+            msg_obj = getattr(mod, 'message', mod)
+            if hasattr(msg_obj, 'raw') and isinstance(msg_obj.raw, dict):
+                msg_obj.raw['datetime'] = iso_ts
+            if hasattr(msg_obj, 'datetime'):
+                try:
+                    setattr(msg_obj, 'datetime', iso_ts)
+                except Exception:
+                    pass
 
 
 def build_attestation_quote(
@@ -237,3 +248,31 @@ def inconclusive_assessment():
             "summary": "The verified enclave report status is pending so completion cannot be established.",
         }
     )
+
+
+@pytest.fixture
+def direct_deploy(direct_vm):
+    from gltest.direct.pytest_plugin import deploy_contract
+    from pathlib import Path
+
+    def _deploy(contract_path: str, *args, sdk_version=None, **kwargs):
+        path = Path(contract_path)
+        if not path.is_absolute():
+            if path.exists():
+                path = path.resolve()
+            else:
+                for base in [
+                    Path.cwd(),
+                    Path.cwd() / "contracts",
+                    Path.cwd() / "intelligent-contracts",
+                ]:
+                    candidate = base / contract_path
+                    if candidate.exists():
+                        path = candidate.resolve()
+                        break
+        if "c2d_marketplace.py" in str(path) and not args:
+            from dcap_fixtures import TEST_SGX_ROOT_CA_PUBKEY, TEST_TCB_SIGNING_PUBKEY
+            return deploy_contract(path, direct_vm, TEST_SGX_ROOT_CA_PUBKEY, TEST_TCB_SIGNING_PUBKEY, sdk_version=sdk_version, **kwargs)
+        return deploy_contract(path, direct_vm, *args, sdk_version=sdk_version, **kwargs)
+
+    return _deploy

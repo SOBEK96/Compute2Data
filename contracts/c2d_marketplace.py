@@ -102,13 +102,14 @@ _ACCEPTABLE_TCB_STATUSES = ("UpToDate", "OK")
 # halves live only in the enclave/collateral signers, never in the contract.
 # Each is an uncompressed P-256 public point as 64 bytes (X || Y) of hex.
 # -----------------------------------------------------------------------------
+# Authentic Intel Production DCAP Trust Anchors (extracted from official Intel PCS)
 INTEL_SGX_ROOT_CA_PUBKEY = (
-    "7904dfa02118e315c4b9576a70ef3e16b7979c9ce47a9c347726f1d196cb65fa"
-    "cdbbda90d2d85ed82142ad18ba5872e06ccc679b2e59230d0a8549049c8485ba"
+    "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f5"
+    "67918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394"
 )
 INTEL_TCB_SIGNING_PUBKEY = (
-    "e00be39d659c4e447e683160ffc649d58ac7ae502783b9e03649d5c877c7ae0e"
-    "103ee3e3dc16ee86d43451d72a08f645ea48290ff22b4dc003aea938744085a2"
+    "43451bcc73c9d5917caf766e61af3fe98087dd4f13257b261e851897799dd13d"
+    "6811fb47713803bb9bae587fccddc2e31be9a28b86962acc6daf96da58eeca96"
 )
 
 # Default trusted measurements provisioned at deployment. They stand in for the
@@ -442,7 +443,7 @@ def _parse_dcap_quote(quote_hex: str) -> dict:
     }
 
 
-def _verify_quote_signature_chain(quote: dict) -> dict:
+def _verify_quote_signature_chain(quote: dict, root_ca_pubkey: str = INTEL_SGX_ROOT_CA_PUBKEY) -> dict:
     """Cryptographically verify the full DCAP ECDSA signature chain on chain.
 
     Trust is anchored in the pinned Intel SGX Root CA key; every link is an
@@ -450,7 +451,7 @@ def _verify_quote_signature_chain(quote: dict) -> dict:
     the public measurements cannot forge any link, so a fabricated quote is
     rejected deterministically with a specific code.
     """
-    root_pub = bytes.fromhex(INTEL_SGX_ROOT_CA_PUBKEY)
+    root_pub = bytes.fromhex(root_ca_pubkey)
 
     # 1. The attestation key signs the header + ISV report (the signed region).
     if not _ecdsa_verify(quote["att_pubkey"], quote["signed_region"], quote["isv_sig"]):
@@ -580,7 +581,7 @@ def _inspect_enclave_quote(
     return result
 
 
-def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
+def _verify_tcb_collateral(endpoint: str, fmspc: str, tcb_signing_pubkey: str = INTEL_TCB_SIGNING_PUBKEY) -> dict:
     """Query the Intel PCS / DCAP collateral service and verify it on chain.
 
     The TCB status collateral for the quote's FMSPC is fetched over HTTPS and its
@@ -596,10 +597,11 @@ def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
     def leader() -> dict:
         url = endpoint + ("&" if "?" in endpoint else "?") + "fmspc=" + fmspc
         # web.get returns a Lazy[Response] in the v0.3.0 SDK; resolve it with .get().
-        response = gl.nondet.web.get(
+        res = gl.nondet.web.get(
             url,
             headers={"Accept": "application/json"},
-        ).get()
+        )
+        response = res.get() if (hasattr(res, "get") and not isinstance(res, dict)) else res
         if response.status != 200:
             return {"ok": False, "code": "ATTESTATION_HTTP_" + str(response.status)}
         if response.body is None:
@@ -625,7 +627,7 @@ def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
             sig_bytes = bytes.fromhex(signature)
         except (ValueError, TypeError):
             return {"ok": False, "code": "COLLATERAL_SIGNATURE_INVALID"}
-        if not _ecdsa_verify(bytes.fromhex(INTEL_TCB_SIGNING_PUBKEY), message, sig_bytes):
+        if not _ecdsa_verify(bytes.fromhex(tcb_signing_pubkey), message, sig_bytes):
             return {"ok": False, "code": "COLLATERAL_SIGNATURE_INVALID"}
 
         if status not in _ACCEPTABLE_TCB_STATUSES:
@@ -634,7 +636,8 @@ def _verify_tcb_collateral(endpoint: str, fmspc: str) -> dict:
 
     try:
         # strict_eq returns a Lazy in the v0.3.0 SDK; resolve it with .get().
-        verdict = gl.eq_principle.strict_eq(leader).get()
+        raw_verdict = gl.eq_principle.strict_eq(leader)
+        verdict = raw_verdict.get() if (hasattr(raw_verdict, "get") and not isinstance(raw_verdict, dict)) else raw_verdict
     except Exception:
         return {"ok": False, "code": "ATTESTATION_UNAVAILABLE"}
     if not isinstance(verdict, dict) or "ok" not in verdict or "code" not in verdict:
@@ -667,8 +670,10 @@ class C2DMarketplace(gl.contract.Contract):
     total_appeal_bonds: u256
     total_datasets: u256
     total_jobs: u256
+    root_ca_pubkey: str
+    tcb_signing_pubkey: str
 
-    def __init__(self):
+    def __init__(self, test_root_ca_pubkey: str = "", test_tcb_signing_pubkey: str = ""):
         self.admin = gl.message.sender_address
         self.minimum_dataset_stake = u256(10 * ONE_GEN)
         self.minimum_job_collateral = u256(2 * ONE_GEN)
@@ -682,6 +687,8 @@ class C2DMarketplace(gl.contract.Contract):
         self.trusted_enclaves[DEFAULT_ENCLAVE_MEASUREMENT] = True
         self.trusted_signers[DEFAULT_ENCLAVE_SIGNER] = True
         self.attestation_endpoint = DEFAULT_ATTESTATION_ENDPOINT
+        self.root_ca_pubkey = test_root_ca_pubkey if test_root_ca_pubkey else INTEL_SGX_ROOT_CA_PUBKEY
+        self.tcb_signing_pubkey = test_tcb_signing_pubkey if test_tcb_signing_pubkey else INTEL_TCB_SIGNING_PUBKEY
 
     # -------------------------------------------------------------------------
     # Enclave trust registry (admin controlled)
@@ -1097,7 +1104,7 @@ class C2DMarketplace(gl.contract.Contract):
         quote = inspection["quote"]
 
         # Stage 2: cryptographic DCAP signature chain to the pinned root.
-        chain = _verify_quote_signature_chain(quote)
+        chain = _verify_quote_signature_chain(quote, self.root_ca_pubkey)
         if not chain["ok"]:
             return chain
 
@@ -1109,7 +1116,7 @@ class C2DMarketplace(gl.contract.Contract):
             return {"ok": False, "code": "UNTRUSTED_SIGNER"}
 
         # Stage 4: authentic, signature-verified TCB collateral from Intel PCS.
-        collateral = _verify_tcb_collateral(self.attestation_endpoint, quote["fmspc"])
+        collateral = _verify_tcb_collateral(self.attestation_endpoint, quote["fmspc"], self.tcb_signing_pubkey)
         if not collateral["ok"]:
             return collateral
 
@@ -1674,8 +1681,8 @@ Return only a JSON object with exactly these fields:
         return {
             "attestation_endpoint": self.attestation_endpoint,
             "attestation_status_ok": ATTESTATION_STATUS_OK,
-            "sgx_root_ca_pubkey": INTEL_SGX_ROOT_CA_PUBKEY,
-            "tcb_signing_pubkey": INTEL_TCB_SIGNING_PUBKEY,
+            "sgx_root_ca_pubkey": self.root_ca_pubkey,
+            "tcb_signing_pubkey": self.tcb_signing_pubkey,
         }
 
     @gl.public.view

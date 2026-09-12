@@ -63,10 +63,20 @@ def clear_clock(direct_vm) -> None:
     deadline on a freshly funded job. direct_vm is accepted for signature
     symmetry with warp() even though only the cached message dict is patched.
     """
-    if "genlayer.gl" in _sys.modules:
-        msg_raw = getattr(_sys.modules["genlayer.gl"], "message_raw", None)
-        if isinstance(msg_raw, dict):
-            msg_raw["datetime"] = ""
+    for mod_name in ["genlayer.message", "genlayer", "genlayer.gl"]:
+        if mod_name in _sys.modules:
+            mod = _sys.modules[mod_name]
+            msg_obj = getattr(mod, "message", mod)
+            if hasattr(msg_obj, "raw") and isinstance(msg_obj.raw, dict):
+                msg_obj.raw["datetime"] = ""
+            if hasattr(msg_obj, "datetime"):
+                try:
+                    setattr(msg_obj, "datetime", "")
+                except Exception:
+                    pass
+            msg_raw = getattr(mod, "message_raw", None)
+            if isinstance(msg_raw, dict):
+                msg_raw["datetime"] = ""
 
 
 def iso_from_epoch(epoch) -> str:

@@ -35,7 +35,7 @@
 
 ## Phase 3: Live GenLayer StudioNet Deployment & On-Chain Transactions (Completed)
 
-- [x] **TASK-301**: Deploy `contracts/c2d_marketplace.py` to GenLayer StudioNet (`0xd1635bd866F6fd616Da1F1EBFFB686D9c01032F9`).
+- [x] **TASK-301**: Deploy `contracts/c2d_marketplace.py` to GenLayer StudioNet (`0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756`).
 - [x] **TASK-302**: Verify deployment transaction receipt with consensus status `MAJORITY_AGREE` (`0x0603acdc...8655b6bb`).
 - [x] **TASK-303**: Execute live on-chain provider staking of `25 GEN` (`0x135eb502...0705239fa`).
 - [x] **TASK-304**: Execute live on-chain dataset registration `genomics-pan-cancer-v1` (`0xd4341905...2789d72b`).

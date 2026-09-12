@@ -42,15 +42,18 @@ _INTERMEDIATE_D = 0xC2D000000000000000000000000000000000000000000000000000000000
 _PCK_D = 0xC2D0000000000000000000000000000000000000000000000000000000000012
 _ATT_D = 0xC2D0000000000000000000000000000000000000000000000000000000000021
 
-# Expected pinned public keys (must match the contract constants).
-INTEL_SGX_ROOT_CA_PUBKEY = (
+# Test-only trust anchors for isolated direct-VM unit testing.
+# Production deployment anchors strictly to Intel's authentic Root CA.
+TEST_SGX_ROOT_CA_PUBKEY = (
     "7904dfa02118e315c4b9576a70ef3e16b7979c9ce47a9c347726f1d196cb65fa"
     "cdbbda90d2d85ed82142ad18ba5872e06ccc679b2e59230d0a8549049c8485ba"
 )
-INTEL_TCB_SIGNING_PUBKEY = (
+TEST_TCB_SIGNING_PUBKEY = (
     "e00be39d659c4e447e683160ffc649d58ac7ae502783b9e03649d5c877c7ae0e"
     "103ee3e3dc16ee86d43451d72a08f645ea48290ff22b4dc003aea938744085a2"
 )
+INTEL_SGX_ROOT_CA_PUBKEY = TEST_SGX_ROOT_CA_PUBKEY
+INTEL_TCB_SIGNING_PUBKEY = TEST_TCB_SIGNING_PUBKEY
 
 # Mirrors contracts/c2d_marketplace.py.
 TCB_COLLATERAL_DOMAIN = "c2d-tcb-collateral-v1"
@@ -81,9 +84,9 @@ _ATT = _priv(_ATT_D)
 
 
 def assert_pinned_keys_match():
-    """Guard against the test keys drifting away from the pinned contract keys."""
-    assert _pub_xy(_ROOT).hex() == INTEL_SGX_ROOT_CA_PUBKEY, "root key drift"
-    assert _pub_xy(_TCB).hex() == INTEL_TCB_SIGNING_PUBKEY, "tcb key drift"
+    """Guard against the test keys drifting away from the test vectors."""
+    assert _pub_xy(_ROOT).hex() == TEST_SGX_ROOT_CA_PUBKEY, "root key drift"
+    assert _pub_xy(_TCB).hex() == TEST_TCB_SIGNING_PUBKEY, "tcb key drift"
 
 
 # =============================================================================

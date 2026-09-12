@@ -23,7 +23,7 @@ import subprocess
 import pytest
 
 
-C2D_ADDRESS = "0x95E5f04875b2dbA71e8044349f8933411298B6D9"
+C2D_ADDRESS = "0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756"
 RPC_URL = "https://studio-dev.genlayer.com/api"
 ONE_GEN = 10**18
 

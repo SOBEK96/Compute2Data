@@ -186,7 +186,7 @@ Compute2Dataata follows the rigorous **Spec-Driven Development (SDD)** process p
 | **Native Token** | **GEN** |
 | **RPC Endpoint** | `https://studio.genlayer.com/api` |
 | **Explorer** | `https://explorer-studio.genlayer.com` |
-| **Active Contract (authentic attestation)** | [`0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd`](https://explorer-studio.genlayer.com/address/0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd) |
+| **Active Contract (authentic attestation)** | [`0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756`](https://explorer-studio.genlayer.com/address/0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756) |
 | **Deployer Address** | `0x91b82b1F3317B7C141ba6Cbdd0b666AA563b9cDb` |
 | **Deployment Transaction**| `0x059168ed040823a2df20158587a52d9d007b3d3b2e098c6b798f6748d1cd33be` |
 | **Consensus Receipt** | `ACCEPTED` / `MAJORITY_AGREE` (100% Validator Agreement) |

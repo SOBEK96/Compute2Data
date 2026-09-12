@@ -2,7 +2,7 @@ import fs from 'fs';
 import { createClient, createAccount } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
 
-const NEW_CONTRACT = "0x56d484AAe50070BE82CcB6F888E8fC51124C2EDd";
+const NEW_CONTRACT = "0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756";
 const account = createAccount();
 
 console.log("Initializing new contract:", NEW_CONTRACT);

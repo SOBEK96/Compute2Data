@@ -246,3 +246,35 @@ def test_admin_can_rotate_attestation_endpoint(
     new_endpoint = "https://pcs.intel.example/sgx/certification/v4/tcb"
     contract.set_attestation_endpoint(new_endpoint)
     assert contract.get_attestation_config()["attestation_endpoint"] == new_endpoint
+
+
+def test_production_default_anchors_to_intel_root_and_rejects_test_keys(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """Verify that a default deployment (passing empty test anchors, identical to
+    production on-chain deployment) anchors strictly to the official Intel SGX Root CA
+    and Intel TCB Signing Key, and unequivocally rejects any quote minted with test keys."""
+    # Deploy with empty strings so it falls back to authentic Intel production constants
+    contract = direct_deploy(CONTRACT_PATH, "", "")
+    config = contract.get_attestation_config()
+    assert config["sgx_root_ca_pubkey"] == (
+        "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f5"
+        "67918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394"
+    )
+    assert config["tcb_signing_pubkey"] == (
+        "43451bcc73c9d5917caf766e61af3fe98087dd4f13257b261e851897799dd13d"
+        "6811fb47713803bb9bae587fccddc2e31be9a28b86962acc6daf96da58eeca96"
+    )
+
+    stake_and_register(direct_vm, contract, direct_alice)
+    fund_job(direct_vm, contract, direct_bob)
+
+    # Submitting a quote minted with test keys fails because the test certification
+    # chain does not terminate at Intel's authentic Root CA.
+    direct_vm.sender = direct_alice
+    result = contract.submit_execution_proof(
+        "job-001", build_attestation_quote(), OUTPUT_COMMITMENT
+    )
+    assert result["status"] == "SLASHED"
+    assert result["violation_code"] == "PCK_CHAIN_INVALID"
+    assert result["attestation_status"] == "ENCLAVE_REJECTED"

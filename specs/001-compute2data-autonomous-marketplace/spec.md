@@ -3,7 +3,7 @@
 **Feature ID**: `001-compute2data-autonomous-marketplace`  
 **Status**: `RATIFIED / IMPLEMENTED`  
 **Network**: `GenLayer StudioNet`  
-**Contract Address**: `0xd1635bd866F6fd616Da1F1EBFFB686D9c01032F9`  
+**Contract Address**: `0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756`  
 **Author**: [Saeid (@SOBEK96)](https://github.com/SOBEK96)
 
 ---
@@ -102,6 +102,6 @@ Compute2Data establishes a **non-custodial Compute-to-Data marketplace** on GenL
 
 - [x] **Linting**: `genvm-lint check` passes 3/3 checks on `C2DMarketplace`.
 - [x] **Unit Testing**: 7/7 Pytest unit tests pass in `< 0.2s`.
-- [x] **On-Chain Deployment**: Live on GenLayer StudioNet at `0xd1635bd866F6fd616Da1F1EBFFB686D9c01032F9`.
+- [x] **On-Chain Deployment**: Live on GenLayer StudioNet at `0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756`.
 - [x] **Real Transactions**: Provider staking, dataset registration, job escrow, and AI proof evaluation verified on-chain.
 - [x] **Frontend Web App**: Next.js 14 App Router, Glassmorphism design system, MetaMask integration, and live deployment on `http://localhost:3000`.
