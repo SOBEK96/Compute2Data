@@ -54,7 +54,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     try {
       await window.ethereum.request({
         method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0xf22f" }], // 61999 StudioNet (stable)
+        params: [{ chainId: "0xf22d" }], // 61997 Studio-Dev (Studio Next)
       });
     } catch (switchError: any) {
       if (switchError.code === 4902 || switchError.data?.originalError?.code === 4902) {
@@ -63,11 +63,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             method: "wallet_addEthereumChain",
             params: [
               {
-                chainId: "0xf22f",
-                chainName: "GenLayer StudioNet",
+                chainId: "0xf22d",
+                chainName: "GenLayer Studio-Dev",
                 nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
-                rpcUrls: ["https://studio.genlayer.com/api"],
-                blockExplorerUrls: ["https://explorer-studio.genlayer.com"],
+                rpcUrls: ["https://studio-dev.genlayer.com/api"],
+                blockExplorerUrls: ["https://explorer-studio-dev.genlayer.com"],
               },
             ],
           });

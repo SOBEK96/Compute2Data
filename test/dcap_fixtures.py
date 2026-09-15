@@ -1,23 +1,27 @@
-"""Realistic Intel SGX / DCAP quote fixtures for the Compute2Data test suite.
+"""Testnet attestation STAND-IN fixtures for the Compute2Data test suite.
 
-These builders emit genuine binary DCAP v3 ECDSA quotes -- a 48-byte Quote
-Header, a 384-byte ISV Enclave Report, and an ECDSA signature section with a PCK
-certification chain -- signed with REAL ECDSA P-256 keys. The contract parses the
-exact same byte layout and cryptographically verifies the whole signature chain
-on chain against its pinned Intel SGX Root CA key, so a quote built here either
-verifies because every link is a valid signature rooted at the pinned root, or it
-is rejected because a link was tampered. There is no SHA-256 "signature"
-construction anywhere: measurements and report_data live in the signed report
-body and authenticity is proven by P-256 signatures, exactly as real DCAP.
+These builders emit DCAP-SHAPED binary quotes -- a 48-byte Quote Header, a
+384-byte ISV Enclave Report, and an ECDSA signature section -- signed with real
+ECDSA P-256 keys. They are NOT genuine Intel-issued DCAP quotes: the
+certification section uses the contract's project-defined compact stand-in layout
+(not a real X.509 PCK chain), and the collateral uses the project-defined
+stand-in JSON (not Intel PCS TCB Info). See contracts/c2d_marketplace.py's module
+header and docs/attestation-roadmap.md for the full stand-in vs. production
+boundary.
 
-Signing runs host-side with the `cryptography` library. The contract cannot use
-C extensions, so it ships its own pure-Python P-256 verifier; this module signs
-and the contract verifies, over the identical curve, hash, and r||s encoding.
+The contract parses the exact same stand-in byte layout and ECDSA-verifies the
+signature chain on chain against the deployed root anchor, so a quote built here
+either verifies (every link is a valid signature rooted at that anchor) or is
+rejected (a link was tampered). Signing runs host-side with the `cryptography`
+library; the contract ships its own pure-Python P-256 verifier over the identical
+curve, hash, and r||s encoding.
 
-The private halves of the pinned Intel roots are deterministic test scalars that
-live ONLY here (never in the contract). The resulting public keys MUST equal the
-constants pinned in contracts/c2d_marketplace.py; assert_pinned_keys_match()
-fails loudly if they ever drift.
+TRUST ANCHOR NOTE: this harness signs under TEST anchors whose PRIVATE halves are
+the deterministic scalars below. They are deliberately DIFFERENT from the genuine
+Intel roots the contract pins by default, so these harness quotes verify only
+when the contract is deployed with the test-only override anchors (see
+tests' direct_deploy fixture). assert_pinned_keys_match() fails loudly if the
+test public keys ever drift from the vectors below.
 """
 
 import hashlib
@@ -32,7 +36,9 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 # =============================================================================
 # Deterministic test key material (private scalars live only in the harness).
 # =============================================================================
-# Pinned roots -- their public halves are hard-coded in the contract.
+# TEST-only roots. Their public halves are injected into the contract via the
+# constructor's test-only override args -- they are NOT the genuine Intel keys
+# the contract pins by default.
 _ROOT_D = 0xC2D0000000000000000000000000000000000000000000000000000000000001
 _TCB_D = 0xC2D0000000000000000000000000000000000000000000000000000000000002
 # Per-platform chain below the pinned root (intermediate + PCK leaf) and the
@@ -42,8 +48,12 @@ _INTERMEDIATE_D = 0xC2D000000000000000000000000000000000000000000000000000000000
 _PCK_D = 0xC2D0000000000000000000000000000000000000000000000000000000000012
 _ATT_D = 0xC2D0000000000000000000000000000000000000000000000000000000000021
 
-# Test-only trust anchors for isolated direct-VM unit testing.
-# Production deployment anchors strictly to Intel's authentic Root CA.
+# TEST-ONLY trust anchors for isolated direct-VM unit testing. Their private
+# halves are the _ROOT_D / _TCB_D scalars above and live only in this harness.
+# These are NOT Intel keys: the contract's default deployment pins the genuine
+# Intel SGX Root CA / TCB Signing keys, and a production-style deployment rejects
+# quotes minted under these test anchors (asserted by the production-default
+# regression test).
 TEST_SGX_ROOT_CA_PUBKEY = (
     "7904dfa02118e315c4b9576a70ef3e16b7979c9ce47a9c347726f1d196cb65fa"
     "cdbbda90d2d85ed82142ad18ba5872e06ccc679b2e59230d0a8549049c8485ba"
@@ -52,8 +62,6 @@ TEST_TCB_SIGNING_PUBKEY = (
     "e00be39d659c4e447e683160ffc649d58ac7ae502783b9e03649d5c877c7ae0e"
     "103ee3e3dc16ee86d43451d72a08f645ea48290ff22b4dc003aea938744085a2"
 )
-INTEL_SGX_ROOT_CA_PUBKEY = TEST_SGX_ROOT_CA_PUBKEY
-INTEL_TCB_SIGNING_PUBKEY = TEST_TCB_SIGNING_PUBKEY
 
 # Mirrors contracts/c2d_marketplace.py.
 TCB_COLLATERAL_DOMAIN = "c2d-tcb-collateral-v1"
@@ -120,8 +128,9 @@ def expected_report_data(dataset_id: str, compute_spec_hash: str, output_data_ha
 
 
 def _compact_cert_data(fmspc: str) -> bytes:
-    """PCK certification data: fmspc + PCK leaf + intermediate, each key signed by
-    its issuer so the chain verifies up to the pinned Intel SGX Root CA."""
+    """STAND-IN certification data: fmspc + PCK leaf + intermediate, each key
+    signed by its issuer so the chain verifies up to the deployed root anchor.
+    Not a real X.509 PCK chain (see the module header)."""
     pck_pub = _pub_xy(_PCK)
     inter_pub = _pub_xy(_INTERMEDIATE)
     sig_leaf_by_intermediate = _sign(_INTERMEDIATE, pck_pub)
@@ -221,8 +230,9 @@ def collateral_response(fmspc: str, tcb_status: str = "UpToDate") -> bytes:
 def tcb_collateral_handler(data):
     """Live web handler standing in for the Intel PCS TCB collateral service.
 
-    Reads the fmspc query parameter the contract appends, returns an
-    authentically signed UpToDate TCB status in the gltest live-handler shape.
+    Reads the fmspc query parameter the contract appends and returns a
+    test-signed (stand-in) UpToDate TCB status in the gltest live-handler shape.
+    This is the project-defined stand-in JSON, not Intel's real PCS TCB Info.
     """
     url = data.get("url", "") if isinstance(data, dict) else ""
     params = parse_qs(urlparse(url).query)

@@ -1,25 +1,29 @@
-"""Authentic on-chain SGX/DCAP attestation regression for Compute2Data.
+"""On-chain STAND-IN SGX/DCAP attestation regression for Compute2Data.
 
-The contract performs REAL Intel DCAP ECDSA quote verification on chain: it
-parses the binary quote, re-derives the report_data binding, verifies the full
-ECDSA signature chain up to a PINNED Intel SGX Root CA key, and verifies the TCB
-collateral's signature against a PINNED Intel TCB signing key. Nothing is trusted
-on the word of an endpoint. These tests pin that path down:
+The contract runs the testnet attestation STAND-IN on chain (see
+contracts/c2d_marketplace.py's module header): it parses the DCAP-shaped quote,
+re-derives the report_data binding, verifies the ECDSA signature chain up to the
+deployed root anchor, and verifies the stand-in TCB collateral's signature
+against the pinned TCB signing key. Nothing is trusted on the word of an
+endpoint. Note the certification/collateral FORMATS are project-defined stand-ins,
+not genuine Intel X.509 PCK chains / PCS TCB Info. These tests pin the path down:
 
-  * A genuine, fully signed quote with authentically signed collateral settles.
+  * A fully signed stand-in quote with a valid stand-in collateral settles.
   * A quote whose report_data is bound to different work is rejected
-    (BINDING_MISMATCH): the enclave did not run this exact workload/output.
+    (BINDING_MISMATCH): the binding did not cover this exact workload/output.
   * An unsigned or non-OK collateral response -- from ANY endpoint -- is rejected,
     because the collateral signature is verified on chain against the pinned key.
   * A quote carrying a mismatched enclave identity (MRENCLAVE) is rejected
     deterministically by the trust registry.
-  * A browser-fabricated quote signature cannot satisfy the on-chain ECDSA chain.
+  * A fabricated quote signature cannot satisfy the on-chain ECDSA chain.
   * A collateral-service outage fails closed, never silently accepting.
   * The collateral endpoint is admin-configurable; trust does not derive from it.
+  * A default (production-style) deploy pins the GENUINE Intel roots and rejects
+    harness-minted quotes, proving the stand-in cannot pose as real traffic.
 
-The simulated Intel PCS collateral service is installed by stake_and_register
-(see test/conftest.py::install_attestation_authority). A test can override it for
-a specific endpoint with direct_vm.mock_web(), which takes precedence.
+The stand-in collateral service is installed by stake_and_register (see
+test/conftest.py::install_attestation_authority). A test can override it for a
+specific endpoint with direct_vm.mock_web(), which takes precedence.
 """
 
 import json
@@ -104,7 +108,7 @@ def test_quote_unsigned_or_invalid_status_rejected(
 ):
     """An unsigned or non-OK TCB collateral response -- from ANY endpoint -- is
     rejected, because the contract verifies the collateral signature on chain
-    against its pinned Intel TCB signing key rather than trusting an OK string."""
+    against its pinned TCB signing key rather than trusting an OK string."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
@@ -127,8 +131,8 @@ def test_quote_unsigned_or_invalid_status_rejected(
 def test_non_ok_tcb_status_with_valid_signature_rejected(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
-    """Even an authentically signed collateral is rejected when the platform TCB
-    status is not acceptable (e.g. OutOfDate), proving the status itself gates
+    """Even a validly signed (stand-in) collateral is rejected when the platform
+    TCB status is not acceptable (e.g. OutOfDate), proving the status itself gates
     settlement rather than the mere presence of a signature."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
@@ -176,9 +180,9 @@ def test_mismatched_mrenclave_measurement(
 def test_browser_fabricated_signature_fails_on_chain_chain(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
-    """A quote signed by a browser from public values cannot satisfy the on-chain
-    ECDSA chain rooted at the pinned Intel SGX Root CA, so it is slashed as
-    SIGNATURE_INVALID with the escrow refunded."""
+    """A quote signed from public values by a party without the attestation key
+    cannot satisfy the on-chain ECDSA chain rooted at the pinned root anchor, so
+    it is slashed as SIGNATURE_INVALID with the escrow refunded."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
@@ -251,10 +255,17 @@ def test_admin_can_rotate_attestation_endpoint(
 def test_production_default_anchors_to_intel_root_and_rejects_test_keys(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
-    """Verify that a default deployment (passing empty test anchors, identical to
-    production on-chain deployment) anchors strictly to the official Intel SGX Root CA
-    and Intel TCB Signing Key, and unequivocally rejects any quote minted with test keys."""
-    # Deploy with empty strings so it falls back to authentic Intel production constants
+    """Verify that a default deployment (passing empty override anchors, identical
+    to a production on-chain deployment) pins the GENUINE Intel SGX Root CA and
+    Intel TCB Signing public keys, and unequivocally rejects any quote minted with
+    the harness test anchors.
+
+    (The pinned anchors are verified-genuine Intel keys; note that even so, this
+    contract only understands the stand-in quote/collateral FORMATS, so it still
+    cannot ingest a real Intel-issued quote -- that is the production roadmap in
+    docs/attestation-roadmap.md.)"""
+    # Deploy with empty strings so it falls back to the genuine Intel production
+    # constants pinned in the contract.
     contract = direct_deploy(CONTRACT_PATH, "", "")
     config = contract.get_attestation_config()
     assert config["sgx_root_ca_pubkey"] == (

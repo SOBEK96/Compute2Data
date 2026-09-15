@@ -42,51 +42,65 @@ ATTESTATION_VERIFIED = "ENCLAVE_VERIFIED"
 ATTESTATION_REJECTED = "ENCLAVE_REJECTED"
 
 # =============================================================================
-# AUTHENTIC SGX / DCAP ATTESTATION -- ON-CHAIN VERIFICATION ARCHITECTURE
+# TESTNET ATTESTATION STAND-IN -- DCAP-SHAPED ON-CHAIN VERIFICATION SIMULATOR
 # -----------------------------------------------------------------------------
-# The contract performs REAL Intel SGX / DCAP ECDSA quote verification entirely
-# on chain. It NEVER trusts an "OK" verdict from any endpoint: every byte that
-# influences the settlement decision is cryptographically verified against a
-# PINNED Intel root of trust using an ECDSA P-256 verifier implemented in pure
-# Python (see _ecdsa_verify). A spoofed or unsigned payload from any HTTPS host
-# cannot produce a valid signature chain that terminates at the pinned root, so
-# it is rejected deterministically.
+# READ THIS BEFORE RELYING ON IT FOR SECURITY:
+# This module is a TESTNET STAND-IN that SIMULATES the shape of Intel SGX / DCAP
+# attestation so the marketplace's escrow / slash / appeal state machine can be
+# exercised end to end on GenLayer testnet. It is NOT a genuine Intel DCAP quote
+# verifier and MUST NOT be presented as one. What is and is not real:
 #
-# Verification pipeline (every stage is deterministic except the collateral
-# fetch, which is wrapped in gl.eq_principle.strict_eq so all validators agree):
+#   REAL:      The pinned roots of trust are the GENUINE Intel SGX Root CA and
+#              Intel SGX TCB Signing public keys (constants below; each verified
+#              byte-for-byte against Intel's published PCS PEM / issuer chain).
+#              The on-chain ECDSA P-256 verifier (_ecdsa_verify) is a real,
+#              from-scratch secp256r1 implementation.
+#   STAND-IN:  The QUOTE CERTIFICATION DATA and the TCB COLLATERAL use a
+#              SIMPLIFIED, PROJECT-DEFINED byte/JSON layout (compact cert format
+#              in _parse_dcap_quote; collateral shape in _verify_tcb_collateral).
+#              They are NOT Intel's real X.509 PCK certificate chains
+#              (cert_data_type 5) nor Intel's real PCS TCB Info JSON. A genuine
+#              Intel-issued quote/collateral will NOT parse here; the quotes
+#              accepted on testnet are minted by the test harness.
+#   ABSENT:    There is no real SGX enclave. The report_data binding below is a
+#              convention this simulator enforces; only an actual enclave running
+#              the workload on real SGX hardware could produce it authentically.
 #
-#   1. Parse the binary DCAP v3 quote (see _parse_dcap_quote): the Quote Header
-#      (version, attestation key type, QE SVN, PCE SVN) and the ISV Enclave
-#      Report (MRENCLAVE, MRSIGNER, ISV_SVN, 64-byte report_data) are read from
-#      their real byte offsets -- not from any attacker-supplied JSON field.
-#   2. Report-data binding (see _expected_report_data): the quote's report_data
-#      MUST equal sha256(dataset_id + compute_spec_hash + output_data_hash),
-#      proving the enclave ran this exact workload over these exact inputs and
-#      committed to this exact output. Any substitution breaks the digest.
-#   3. Signature chain (see _verify_quote_signature_chain): the ISV report is
-#      ECDSA-verified against the attestation key; the attestation key is bound
-#      by the QE report; the QE report is ECDSA-verified against the PCK leaf;
-#      and the PCK chain is verified link by link up to the PINNED Intel SGX
-#      Root CA public key. No link can be forged from public values.
-#   4. Trust registry: the cryptographically recovered MRENCLAVE / MRSIGNER must
-#      be whitelisted by the admin.
-#   5. Collateral query (see _verify_tcb_collateral): the TCB status collateral
-#      for the quote's FMSPC is fetched from the Intel PCS / DCAP collateral
-#      service and its ECDSA signature is verified on chain against the PINNED
-#      Intel TCB signing key; only an authentically signed, acceptable TCB
-#      status lets the quote through.
+# Because the default deployment pins the genuine Intel roots, a testnet-minted
+# quote is REJECTED under a production-style deployment -- so this stand-in does
+# not masquerade as accepting real traffic. Real ingestion of Intel DCAP quotes
+# + PCS collateral is the production roadmap: see docs/attestation-roadmap.md.
+#
+# Simulated verification pipeline (deterministic except the collateral fetch,
+# which is wrapped in gl.eq_principle.strict_eq so all validators agree):
+#
+#   1. Parse the DCAP-shaped binary quote (see _parse_dcap_quote): Quote Header
+#      and ISV Enclave Report (MRENCLAVE, MRSIGNER, ISV_SVN, 64-byte
+#      report_data) are read from fixed byte offsets.
+#   2. Report-data binding (see _expected_report_data): report_data must equal
+#      sha256(dataset_id + compute_spec_hash + output_data_hash). This is the
+#      simulator's binding convention, not an enclave-sealed guarantee.
+#   3. Signature chain (see _verify_quote_signature_chain): each link is a real
+#      ECDSA P-256 check up to the pinned root -- but over the STAND-IN compact
+#      cert layout, not a real X.509 PCK chain.
+#   4. Trust registry: the recovered MRENCLAVE / MRSIGNER must be whitelisted.
+#   5. Collateral query (see _verify_tcb_collateral): the STAND-IN collateral
+#      for the quote's FMSPC is fetched and its ECDSA signature checked against
+#      the pinned Intel TCB signing key. Format is project-defined, not PCS.
 # =============================================================================
 #
-# Domain separation tags. Keeping them explicit and versioned lets an enclave /
-# collateral service reproduce the exact bytes the contract re-derives on chain.
+# Domain separation tags for the STAND-IN collateral signature. These are a
+# PROJECT-DEFINED convention (not part of any Intel format); the test collateral
+# signer reproduces the exact bytes the contract re-derives on chain.
 REPORT_DATA_DOMAIN = "c2d-attestation-binding-v1"
 TCB_COLLATERAL_DOMAIN = "c2d-tcb-collateral-v1"
 
-# Intel PCS / DCAP collateral endpoint. A production deployment points this at
-# Intel's Provisioning Certification Service (TCB info by FMSPC); the admin can
-# repoint it via set_attestation_endpoint to rotate to a mirror. Trust does NOT
-# derive from the endpoint -- the fetched collateral is ECDSA-verified on chain
-# against the pinned Intel TCB signing key regardless of where it was served.
+# Default collateral endpoint. This points at Intel's real PCS URL for realism,
+# but note _verify_tcb_collateral expects the testnet STAND-IN JSON shape, not
+# Intel's real PCS TCB Info response -- so on testnet the admin repoints this via
+# set_attestation_endpoint to a handler that serves the stand-in format. Trust
+# does NOT derive from the endpoint: the fetched collateral is ECDSA-verified on
+# chain against the pinned Intel TCB signing key regardless of where it served.
 DEFAULT_ATTESTATION_ENDPOINT = "https://api.trustedservices.intel.com/sgx/certification/v4/tcb"
 
 # Acceptable TCB / platform statuses. A genuinely up-to-date platform reports
@@ -96,13 +110,22 @@ ATTESTATION_STATUS_OK = "UpToDate"
 _ACCEPTABLE_TCB_STATUSES = ("UpToDate", "OK")
 
 # -----------------------------------------------------------------------------
-# Pinned roots of trust. These are the ONLY values the verdict is ultimately
-# rooted in. In production they are Intel's published SGX Root CA key and TCB
-# signing key; here they are the deployment-anchored test vectors whose private
-# halves live only in the enclave/collateral signers, never in the contract.
+# Pinned roots of trust. These two constants ARE the genuine Intel SGX Root CA
+# and Intel SGX TCB Signing public keys. Each was verified byte-for-byte against
+# Intel's published PCS material:
+#   INTEL_SGX_ROOT_CA_PUBKEY == pubkey of
+#     Intel_SGX_Provisioning_Certification_RootCA.pem (CN=Intel SGX Root CA).
+#   INTEL_TCB_SIGNING_PUBKEY == pubkey of the "Intel SGX TCB Signing" cert served
+#     in the PCS v4 TCB-Info issuer chain.
 # Each is an uncompressed P-256 public point as 64 bytes (X || Y) of hex.
+#
+# NOTE: pinning the real Intel roots does NOT make this a genuine DCAP verifier.
+# The quote-certification and collateral FORMATS this file parses are testnet
+# stand-ins (see the module header), so a real Intel-issued quote will not parse
+# and only harness-minted quotes are accepted on testnet. The TEST anchors used
+# by the suite live in test/dcap_fixtures.py, whose private halves live in the
+# harness and are injected via the constructor's test-only override arguments.
 # -----------------------------------------------------------------------------
-# Authentic Intel Production DCAP Trust Anchors (extracted from official Intel PCS)
 INTEL_SGX_ROOT_CA_PUBKEY = (
     "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f5"
     "67918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394"
@@ -303,9 +326,10 @@ def _ecdsa_verify(pub_xy: bytes, message: bytes, sig64: bytes) -> bool:
 
 
 # -----------------------------------------------------------------------------
-# Binary DCAP v3 quote layout. Offsets follow the Intel SGX ECDSA quote format:
-# a 48-byte Quote Header, a 384-byte ISV Enclave Report (SGX report body), then
-# the ECDSA signature section.
+# DCAP-shaped quote layout. The Quote Header (48 bytes) and ISV Enclave Report
+# (384-byte SGX report body) offsets DO follow the real Intel SGX ECDSA quote
+# format, so this stand-in mirrors DCAP where that is cheap. The certification
+# section, however, is a project-defined stand-in (see below), NOT real DCAP.
 # -----------------------------------------------------------------------------
 _Q_HEADER_LEN = 48
 _Q_REPORT_LEN = 384
@@ -316,10 +340,14 @@ _R_MRSIGNER = 128
 _R_ISV_PRODID = 256
 _R_ISV_SVN = 258
 _R_REPORT_DATA = 320
-# Compact PCK certification data layout (cert_data_type 0x0101): the Intel X.509
-# chain is modelled as raw P-256 keys plus the issuer ECDSA signatures over each
-# subject key, preserving the exact trust semantics (issuer signs subject, chain
-# terminates at the pinned Intel SGX Root CA) without an on-chain ASN.1 parser.
+# STAND-IN certification data layout (project-defined cert_data_type 0x0101).
+# This is NOT Intel's real quote certification data (cert_data_type 5, a PEM
+# X.509 PCK certificate chain). Instead of parsing X.509 / ASN.1 on chain, the
+# chain is modelled as raw P-256 keys plus issuer ECDSA signatures over each
+# subject key. It preserves the trust *shape* (issuer signs subject; chain ends
+# at the pinned Intel SGX Root CA) but a genuine Intel quote will not parse here.
+# Production must replace this with a real X.509 PCK chain parser -- see
+# docs/attestation-roadmap.md.
 _CERT_DATA_TYPE_COMPACT = 0x0101
 _CERT_FMSPC_LEN = 6
 
@@ -444,12 +472,14 @@ def _parse_dcap_quote(quote_hex: str) -> dict:
 
 
 def _verify_quote_signature_chain(quote: dict, root_ca_pubkey: str = INTEL_SGX_ROOT_CA_PUBKEY) -> dict:
-    """Cryptographically verify the full DCAP ECDSA signature chain on chain.
+    """Verify the STAND-IN DCAP-shaped ECDSA signature chain on chain.
 
-    Trust is anchored in the pinned Intel SGX Root CA key; every link is an
-    ECDSA P-256 signature checked by _ecdsa_verify. A browser that knows only
-    the public measurements cannot forge any link, so a fabricated quote is
-    rejected deterministically with a specific code.
+    Trust is anchored in the pinned (genuine) Intel SGX Root CA key; every link
+    is a real ECDSA P-256 signature checked by _ecdsa_verify. NOTE: the links are
+    verified over the project-defined compact cert layout, not a real X.509 PCK
+    chain, so this authenticates harness-minted stand-in quotes -- not genuine
+    Intel-issued quotes. A fabricated stand-in quote is still rejected
+    deterministically with a specific code.
     """
     root_pub = bytes.fromhex(root_ca_pubkey)
 
@@ -582,16 +612,19 @@ def _inspect_enclave_quote(
 
 
 def _verify_tcb_collateral(endpoint: str, fmspc: str, tcb_signing_pubkey: str = INTEL_TCB_SIGNING_PUBKEY) -> dict:
-    """Query the Intel PCS / DCAP collateral service and verify it on chain.
+    """Query the STAND-IN TCB collateral service and verify it on chain.
 
-    The TCB status collateral for the quote's FMSPC is fetched over HTTPS and its
-    ECDSA signature is verified against the PINNED Intel TCB signing key. An
-    unsigned or non-OK response -- from ANY endpoint -- cannot satisfy the pinned
-    signature check, which is exactly what defeats the old "trust the endpoint's
-    OK" weakness. The fetch is wrapped in gl.eq_principle.strict_eq so every
-    validator independently re-queries and must agree on the verdict.
+    The collateral for the quote's FMSPC is fetched over HTTPS and its ECDSA
+    signature is verified against the pinned (genuine) Intel TCB signing key. An
+    unsigned or non-OK response cannot satisfy the pinned signature check.
 
-    Returns {"ok": bool, "code": str}.
+    IMPORTANT: the JSON shape parsed here ({fmspc, tcbStatus, signature} over a
+    project-defined message) is a testnet STAND-IN, NOT Intel's real PCS TCB Info
+    JSON (a tcbInfo object with tcbLevels, tcbEvaluationDataNumber, nextUpdate,
+    signed over its canonical serialization). Production must ingest and verify
+    the real PCS TCB Info format -- see docs/attestation-roadmap.md. The fetch is
+    wrapped in gl.eq_principle.strict_eq so every validator independently
+    re-queries and must agree on the verdict. Returns {"ok": bool, "code": str}.
     """
 
     def leader() -> dict:
@@ -989,21 +1022,20 @@ class C2DMarketplace(gl.contract.Contract):
         attestation_quote: str,
         output_commitment: str,
     ) -> dict:
-        """Settle a job from an authentically attested enclave quote.
+        """Settle a job from a (stand-in) attested enclave quote.
 
-        Verification proceeds in three stages:
+        NOTE: this settles against the testnet attestation STAND-IN, not a
+        genuine Intel DCAP quote (see the module header). Verification stages:
 
         Stage 1a (deterministic binding): the quote's report_data must equal the
-          canonical five-field commitment over dataset, input, model, compute
-          specification, AND output. Any substitution changes the binding and is
-          rejected here with no network I/O.
-        Stage 1b (authentic remote attestation): the opaque quote is submitted
-          to the attestation authority via gl.nondet.web.get under an equivalence
-          principle. Only a status of OK from that independent authority -- whose
-          verdict a browser cannot fabricate from public values -- lets the quote
-          through, and its authenticated measurements/report_data must match the
-          on-chain binding and the admin trust registry.
-        Stage 2 (semantic review): a secondary LLM review of the now-authenticated
+          canonical binding over dataset, compute specification, AND output, and
+          the artifact fields must match the on-chain job. No network I/O.
+        Stage 1b (stand-in signature chain + collateral): the DCAP-shaped
+          signature chain is ECDSA-verified up to the pinned Intel root, the
+          recovered measurements must be in the admin trust registry, and the
+          stand-in TCB collateral is fetched under an equivalence principle and
+          its signature checked against the pinned Intel TCB signing key.
+        Stage 2 (semantic review): a secondary LLM review of the verified
           structured report.
         """
         if job_id not in self.jobs:
@@ -1057,7 +1089,7 @@ class C2DMarketplace(gl.contract.Contract):
 
         if not verify_ok:
             job.attestation_status = ATTESTATION_REJECTED
-            summary = "Enclave attestation failed authentic verification: " + verify_code
+            summary = "Enclave attestation failed stand-in verification: " + verify_code
             return self._settle_slash(job_id, job, dataset, verify_code, summary)
 
         job.attestation_status = ATTESTATION_VERIFIED
@@ -1090,16 +1122,16 @@ class C2DMarketplace(gl.contract.Contract):
         return self._settle_slash(job_id, job, dataset, decision["violation_code"], summary)
 
     def _verify_attested_quote(self, inspection: dict) -> dict:
-        """Authenticate a structurally-sound quote entirely on chain.
+        """Verify a structurally-sound STAND-IN quote entirely on chain.
 
-        Returns {"ok": bool, "code": str}. The pipeline roots trust only in
-        pinned Intel keys and on-chain ECDSA: (1) the full DCAP signature chain
-        must verify up to the pinned Intel SGX Root CA; (2) the cryptographically
+        Returns {"ok": bool, "code": str}. Trust roots only in the pinned
+        (genuine) Intel keys and on-chain ECDSA: (1) the stand-in DCAP-shaped
+        signature chain must verify up to the pinned Intel SGX Root CA; (2) the
         recovered MRENCLAVE / MRSIGNER must be in the admin trust registry; and
-        (3) the TCB collateral for the quote's FMSPC, fetched from the Intel PCS,
-        must carry a valid signature from the pinned Intel TCB signing key and an
-        acceptable status. A non-OK result is carried straight through as the
-        settlement violation code (e.g. SIGNATURE_INVALID).
+        (3) the stand-in TCB collateral for the quote's FMSPC must carry a valid
+        signature from the pinned Intel TCB signing key and an acceptable status.
+        A non-OK result is carried through as the settlement violation code. This
+        verifies harness-minted stand-in quotes, not genuine Intel quotes.
         """
         quote = inspection["quote"]
 
@@ -1115,7 +1147,7 @@ class C2DMarketplace(gl.contract.Contract):
         if not self.trusted_signers.get(quote["mrsigner"], False):
             return {"ok": False, "code": "UNTRUSTED_SIGNER"}
 
-        # Stage 4: authentic, signature-verified TCB collateral from Intel PCS.
+        # Stage 4: stand-in, signature-verified TCB collateral (see module header).
         collateral = _verify_tcb_collateral(self.attestation_endpoint, quote["fmspc"], self.tcb_signing_pubkey)
         if not collateral["ok"]:
             return collateral
@@ -1352,11 +1384,11 @@ Return only a JSON object with exactly these fields:
     def resolve_appeal(self, job_id: str) -> dict:
         """Adjudicate an appeal by re-verifying the submitted enclave evidence.
 
-        The appeal evidence is put through the SAME authentic verification path
-        as an execution proof: the deterministic five-field binding, then remote
-        attestation against the authority via gl.nondet.web.get, then the trust
-        registry. Only evidence that authentically attests a COMPLETED run for
-        this exact job can reverse the prior verdict.
+        The appeal evidence is put through the SAME stand-in verification path as
+        an execution proof: the deterministic binding, then the stand-in
+        signature chain + collateral check, then the trust registry. Only
+        evidence that verifies as a COMPLETED run for this exact job can reverse
+        the prior verdict.
 
         For SLASHED-origin appeals: an accepted appeal reverses the slash from
         the protocol treasury and returns stake to the provider. A rejected appeal
@@ -1391,7 +1423,7 @@ Return only a JSON object with exactly these fields:
         )
         accepted = inspection["ok"]
         if accepted:
-            # Re-verify the evidence through the same authentic on-chain pipeline
+            # Re-verify the evidence through the same stand-in on-chain pipeline
             # (signature chain, trust registry, signed collateral) before it can
             # overturn a settled verdict.
             authenticity = self._verify_attested_quote(inspection)

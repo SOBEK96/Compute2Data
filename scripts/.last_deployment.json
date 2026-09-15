@@ -1,9 +1,11 @@
 {
-  "contract_address": "0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756",
-  "deploy_tx_hash": "0x059168ed040823a2df20158587a52d9d007b3d3b2e098c6b798f6748d1cd33be",
-  "deployer": "0x91b82b1F3317B7C141ba6Cbdd0b666AA563b9cDb",
-  "chain_id": 61999,
-  "rpc": "https://studio.genlayer.com/api",
-  "status": "ACCEPTED",
-  "result": "MAJORITY_AGREE"
+  "contract_address": "0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9",
+  "deploy_tx_hash": "",
+  "deployer": "",
+  "chain_id": 61997,
+  "rpc": "https://studio-dev.genlayer.com/api",
+  "explorer": "https://explorer-studio-dev.genlayer.com",
+  "status": "LIVE",
+  "result": "",
+  "notes": "deploy_tx_hash/deployer/result not recorded in this session; verify on the studio-dev explorer. See deployments/studio-dev.json."
 }

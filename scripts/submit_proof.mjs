@@ -4,26 +4,30 @@ import { createClient, createAccount } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
 
 // Contract address on StudioNet / Studio-Dev
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x6019Bd6C1b7EB06EcC45baf5ed4470c98890F756";
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9";
 
 // =============================================================================
-// Authentic Intel SGX / DCAP Attestation Proof Relayer
+// Compute2Data Attestation Proof Relayer (TESTNET STAND-IN)
 // -----------------------------------------------------------------------------
-// This script acts strictly as an on-chain relayer for authentic hardware-generated
-// attestation artifacts produced by genuine Intel SGX / DCAP enclaves.
+// This script relays an attestation artifact to the contract's submit_execution_proof
+// entrypoint. It carries NO signing keys and mints nothing; it only forwards a quote
+// envelope that already exists on disk / in the environment.
 //
-// In strict compliance with Web3 security standards and protocol trust invariants:
-// 1. NO private keys or test-key minting routines are contained in this script.
-// 2. Quotes CANNOT be forged or synthesized by client-side scripts.
-// 3. The contract cryptographically validates the full ECDSA signature chain
-//    anchored to the official Intel SGX Root CA (NIST P-256), and validates TCB
-//    collateral signed by the authentic Intel TCB Signing Key.
+// IMPORTANT -- what the contract verifies today is a TESTNET STAND-IN, not genuine
+// Intel DCAP:
+// 1. The contract pins the genuine Intel SGX Root CA / TCB Signing public keys, and
+//    its on-chain ECDSA P-256 verifier is real. But the quote CERT layout and the TCB
+//    collateral JSON are the project-defined stand-in formats (not Intel's X.509 PCK
+//    chain / PCS TCB Info), so a genuine Intel-issued quote will NOT parse yet.
+// 2. There is no real SGX enclave in the loop; the report_data binding is a convention
+//    this simulator enforces. See docs/attestation-roadmap.md for the stand-in vs.
+//    production boundary and the path to ingesting genuine PCS collateral.
 // =============================================================================
 
 function loadAttestationQuote() {
-  const quotePath = process.env.ENCLAVE_QUOTE_PATH || path.join(process.cwd(), 'artifacts', 'authentic_quote.json');
+  const quotePath = process.env.ENCLAVE_QUOTE_PATH || path.join(process.cwd(), 'artifacts', 'attestation_quote.json');
   if (fs.existsSync(quotePath)) {
-    console.log(`[Relayer] Loading authentic attestation quote from: ${quotePath}`);
+    console.log(`[Relayer] Loading attestation quote (stand-in envelope) from: ${quotePath}`);
     const raw = fs.readFileSync(quotePath, 'utf8');
     return JSON.parse(raw);
   }
@@ -34,8 +38,8 @@ function loadAttestationQuote() {
     return JSON.parse(process.env.ATTESTATION_QUOTE);
   }
 
-  console.warn(`[Relayer] No authentic enclave quote found at ${quotePath}.`);
-  console.warn('[Relayer] Real Intel SGX enclaves dump quote artifacts to artifacts/authentic_quote.json or pass via ENCLAVE_QUOTE_PATH.');
+  console.warn(`[Relayer] No attestation quote envelope found at ${quotePath}.`);
+  console.warn('[Relayer] Provide a DCAP-shaped stand-in quote at artifacts/attestation_quote.json or via ENCLAVE_QUOTE_PATH / ATTESTATION_QUOTE.');
   return null;
 }
 
@@ -44,7 +48,7 @@ async function main() {
   const provider = providerKey ? createAccount(providerKey) : createAccount();
   const client = createClient({ chain: studionet, account: provider });
 
-  console.log("=== Compute2Data Authentic Proof Relayer ===");
+  console.log("=== Compute2Data Attestation Proof Relayer (testnet stand-in) ===");
   console.log("Target Contract Address:", CONTRACT_ADDRESS);
   console.log("Provider Relayer Address:", provider.address);
 
@@ -55,7 +59,7 @@ async function main() {
     args: []
   });
   console.log("\n1. Contract Attestation Configuration:");
-  console.log("   - Remote PCS Endpoint:", config.attestation_endpoint);
+  console.log("   - Collateral Endpoint (stand-in):", config.attestation_endpoint);
   console.log("   - Anchored SGX Root CA:", config.sgx_root_ca_pubkey);
   console.log("   - Anchored TCB Signer: ", config.tcb_signing_pubkey);
 
@@ -64,11 +68,12 @@ async function main() {
 
   const quoteArtifact = loadAttestationQuote();
   if (!quoteArtifact) {
-    console.log("\n[Notice] Submission halted: Hardware enclave quote artifact required for on-chain verification.");
-    console.log("To submit a proof:");
-    console.log("  1. Run your compute workload inside an authentic Intel SGX enclave.");
-    console.log("  2. Place the generated quote envelope in artifacts/authentic_quote.json");
+    console.log("\n[Notice] Submission halted: an attestation quote envelope is required for on-chain verification.");
+    console.log("To submit a proof against the testnet stand-in:");
+    console.log("  1. Produce a DCAP-shaped stand-in quote envelope (see test/dcap_fixtures.py for the exact byte layout).");
+    console.log("  2. Place it at artifacts/attestation_quote.json (or set ENCLAVE_QUOTE_PATH / ATTESTATION_QUOTE).");
     console.log("  3. Re-run: node scripts/submit_proof.mjs");
+    console.log("  Note: genuine Intel SGX enclave quotes will NOT parse until the production path in docs/attestation-roadmap.md lands.");
     return;
   }
 

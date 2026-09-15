@@ -164,13 +164,14 @@ def build_attestation_quote_with_binding_mismatch(
 
 
 def install_attestation_authority(direct_vm):
-    """Install the simulated Intel PCS collateral service as the live web handler.
+    """Install the STAND-IN TCB collateral service as the live web handler.
 
     Every submit_execution_proof / resolve_appeal fetches TCB collateral for the
-    quote's FMSPC via gl.nondet.web.get; this handler returns an authentically
-    signed UpToDate status. The contract verifies that signature on chain against
-    its pinned Intel TCB signing key, so authenticity does not come from the
-    endpoint. A test can override the collateral by registering an explicit
+    quote's FMSPC via gl.nondet.web.get; this handler returns a test-signed
+    (stand-in) UpToDate status. The contract verifies that signature on chain
+    against its pinned Intel TCB signing key, so the verdict does not come from
+    the endpoint. This is the project-defined stand-in JSON, not Intel's real PCS
+    TCB Info. A test can override the collateral by registering an explicit
     direct_vm.mock_web(...), which takes precedence over this fallback handler.
     """
     direct_vm._live_web_handler = tcb_collateral_handler

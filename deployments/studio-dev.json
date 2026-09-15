@@ -1,0 +1,13 @@
+{
+  "network": "GenLayer Studio-Dev (Studio Next)",
+  "contract": "c2d_marketplace.py",
+  "contract_address": "0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9",
+  "chain_id": 61997,
+  "rpc": "https://studio-dev.genlayer.com/api",
+  "explorer": "https://explorer-studio-dev.genlayer.com",
+  "explorer_address_url": "https://explorer-studio-dev.genlayer.com/address/0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9",
+  "deploy_tx_hash": "",
+  "deployer": "",
+  "status": "LIVE",
+  "notes": "Attestation front-end is a testnet stand-in (see docs/attestation-roadmap.md). deploy_tx_hash/deployer are unrecorded in this session; view the contract creation on the explorer_address_url."
+}
