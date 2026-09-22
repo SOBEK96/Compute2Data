@@ -74,19 +74,46 @@ export type ProviderReputation = {
   reputationScore: number;
 };
 
-// Default measurements provisioned inside contracts/c2d_marketplace.py, exposed
-// for display. The contract recovers the real MRENCLAVE/MRSIGNER from the signed
-// binary quote; these are only the admin-whitelisted defaults.
-//
-// AUTHENTICITY: the browser does NOT and CANNOT produce a genuine DCAP quote.
-// The binary quote is emitted by the provider's real TEE (it carries the sealed
-// report_data and the full ECDSA signature chain) and supplied to this helper
-// verbatim as `dcapQuoteHex`. On chain the contract parses that binary quote,
-// re-derives the report_data binding, and verifies the ECDSA chain up to the
-// pinned Intel SGX Root CA; a value fabricated in the browser is rejected. See
-// the "Authentic SGX/DCAP Attestation Verification" note in README.md.
-export const DEFAULT_ENCLAVE_MEASUREMENT = "11".repeat(32);
-export const DEFAULT_ENCLAVE_SIGNER = "22".repeat(32);
+// AUTHENTICITY: the browser does NOT and CANNOT produce an attestation. The
+// SGX quote is emitted by the provider's enclave on Intel SGX hardware (it
+// carries the sealed report_data, the attestation-key signatures, and Intel's
+// X.509 PCK certificate chain) and the Intel PCS collateral is fetched from
+// Intel by scripts/fetch_pcs_collateral.mjs. Both are forwarded verbatim; the
+// contract verifies everything on chain to the pinned Intel SGX Root CA and
+// reverts on anything that is not genuine. See "Intel SGX DCAP Attestation" in
+// README.md.
+
+// Fields of the Intel PCS collateral bundle, exactly as the contract expects.
+export const PCS_COLLATERAL_FIELDS = [
+  "tcb_info",
+  "tcb_info_issuer_chain",
+  "qe_identity",
+  "qe_identity_issuer_chain",
+  "pck_crl",
+  "root_ca_crl",
+] as const;
+
+export type PcsCollateral = Record<(typeof PCS_COLLATERAL_FIELDS)[number], string>;
+
+/** Parse the collateral JSON produced by scripts/fetch_pcs_collateral.mjs. */
+export function parsePcsCollateral(text: string): PcsCollateral {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Intel PCS collateral must be the JSON produced by scripts/fetch_pcs_collateral.mjs");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Intel PCS collateral must be a JSON object");
+  }
+  const record = parsed as Record<string, unknown>;
+  for (const field of PCS_COLLATERAL_FIELDS) {
+    if (typeof record[field] !== "string" || record[field] === "") {
+      throw new Error(`Intel PCS collateral is missing "${field}"`);
+    }
+  }
+  return record as PcsCollateral;
+}
 
 async function sha256Hex(input: string): Promise<string> {
   const bytes = new TextEncoder().encode(input);
@@ -106,21 +133,23 @@ export type AttestationArtifact = {
   computeSpec: string;
   outputCommitment: string;
   resultStatus?: string;
-  // The genuine binary DCAP quote (hex) emitted by the provider's TEE. It
-  // carries the measurements, the sealed report_data, and the full ECDSA
-  // signature chain. This function never manufactures it; a missing or
-  // fabricated value is rejected on chain.
+  // The Intel SGX ECDSA quote (hex) emitted by the provider's enclave. It
+  // carries the measurements, the sealed report_data, the attestation-key
+  // signatures, and Intel's X.509 PCK certificate chain. This function never
+  // manufactures it; a missing or fabricated value is rejected on chain.
   dcapQuoteHex: string;
+  // Intel PCS collateral for the quote's platform (see parsePcsCollateral).
+  collateral: PcsCollateral;
   // Optional override to intentionally cross a divergent compute-spec
   // commitment for mismatch/slash regression testing in the console.
   computeSpecCommitmentOverride?: string;
 };
 
 /**
- * Wrap the provider's genuine binary DCAP quote with the cleartext artifact the
- * contract cross-checks against the on-chain job. The report_data binding and
- * the ECDSA signature chain live inside `dcapQuoteHex` (sealed by the enclave);
- * this function only assembles the transport envelope — it never fabricates any
+ * Wrap the provider's SGX quote and Intel PCS collateral with the cleartext
+ * artifact the contract cross-checks against the on-chain job. The report_data
+ * binding and every signature live inside `dcapQuoteHex` and `collateral`; this
+ * function only assembles the transport envelope and never fabricates any
  * cryptographic material. Authenticity is established entirely on chain.
  */
 export async function buildAttestationQuote(artifact: AttestationArtifact): Promise<string> {
@@ -138,8 +167,10 @@ export async function buildAttestationQuote(artifact: AttestationArtifact): Prom
       output_data_hash: outputDataHash,
       result_status: resultStatus,
     },
-    // The real binary quote from the provider's enclave, verified on chain.
+    // The quote from the provider's enclave and Intel's PCS collateral,
+    // both verified on chain to the pinned Intel SGX Root CA.
     dcap_quote: artifact.dcapQuoteHex,
+    collateral: artifact.collateral,
   });
 }
 

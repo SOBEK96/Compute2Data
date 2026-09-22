@@ -2,18 +2,14 @@
 
 This suite locks in every domain-specific threshold and bracket boundary by
 calling the contract's module-level pure helper functions directly, WITHOUT a
-per-test VM fixture. The helpers under test (_is_hex_of_bytes, _parse_dcap_quote,
-_expected_report_data, _inspect_enclave_quote, _validate_production_id) depend
-only on hashlib / json and never touch VM storage or nondeterminism, so
+per-test VM fixture. The helpers under test (_is_hex_of_bytes,
+_check_job_binding, _parse_evidence_envelope, _expected_report_data, the DER /
+ECDSA / signed-JSON primitives, _validate_production_id) are pure, so
 exercising them in-process runs in well under a millisecond each and pins the
 exact boundary at which each threshold flips.
 
-Signature authenticity is NOT decided here: _inspect_enclave_quote performs the
-deterministic structural parse + artifact + report_data binding checks; the
-ECDSA signature chain is verified separately by _verify_quote_signature_chain
-(exercised in test_authentic_attestation.py). Accordingly this suite builds
-genuine binary DCAP quotes and asserts that a structurally sound quote with a
-correct binding passes inspection regardless of signature verification.
+End-to-end authenticity (X.509 PCK chain, CRLs, PCS collateral, genuine Intel
+vectors) is exercised in test_authentic_attestation.py.
 
 The contract module is imported once (module-scoped fixture) using the same SDK
 loader the direct plugin uses; the imported module object is held for the whole
@@ -38,11 +34,7 @@ _PRIMARY_TEST_DIR = os.path.join(_ROOT, "test")
 if _PRIMARY_TEST_DIR not in sys.path:
     sys.path.insert(0, _PRIMARY_TEST_DIR)
 
-from dcap_fixtures import build_binary_quote, expected_report_data  # noqa: E402
-
-# Trusted default measurements provisioned by the contract at deploy time.
-MRENCLAVE = "11" * 32
-MRSIGNER = "22" * 32
+from dcap_fixtures import INTEL_SGX_ROOT_CA_PUBKEY, expected_report_data  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -89,62 +81,41 @@ def _spec_commitment(spec: str) -> str:
     return hashlib.sha256(spec.encode("utf-8")).hexdigest()
 
 
-def _valid_quote(
+def _artifact(
     *,
-    dataset_id="did",
     dataset_commitment="dc",
     input_commitment="ic",
     model_id="mid",
     compute_spec="spec",
     output_commitment="oc",
-    mrenclave=MRENCLAVE,
-    mrsigner=MRSIGNER,
     result_status="COMPLETED",
     include_compute_spec=True,
-    tamper_binding=False,
-    malformed_quote=False,
 ):
-    """Build a genuine binary DCAP quote wrapped with its artifact, as JSON.
-
-    The report_data is the canonical sha256(dataset_id + compute_spec_hash +
-    output_data_hash) the contract re-derives, so a boundary result reflects the
-    contract logic and not a divergent re-implementation. tamper_binding binds
-    report_data to a different output (BINDING_MISMATCH); malformed_quote
-    replaces the binary quote with unparseable bytes (MALFORMED_QUOTE).
-    """
-    compute_spec_commitment = _spec_commitment(compute_spec)
-    output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
-    if tamper_binding:
-        decoy = hashlib.sha256((output_commitment + "-decoy").encode("utf-8")).hexdigest()
-        report_data = expected_report_data(dataset_id, compute_spec_commitment, decoy)
-    else:
-        report_data = expected_report_data(dataset_id, compute_spec_commitment, output_data_hash)
-
-    if malformed_quote:
-        dcap_quote = "not-a-valid-hex-quote"
-    else:
-        dcap_quote = build_binary_quote(
-            mrenclave=mrenclave, mrsigner=mrsigner, report_data=report_data
-        )
-
     artifact = {
-        "dataset_id": dataset_id,
         "dataset_commitment": dataset_commitment,
         "input_commitment": input_commitment,
         "model_id": model_id,
         "output_commitment": output_commitment,
-        "output_data_hash": output_data_hash,
         "result_status": result_status,
     }
     if include_compute_spec:
-        artifact["compute_spec_commitment"] = compute_spec_commitment
-    return json.dumps({"artifact": artifact, "dcap_quote": dcap_quote}, sort_keys=True)
+        artifact["compute_spec_commitment"] = _spec_commitment(compute_spec)
+    return artifact
 
 
-def _inspect(c2d, quote, *, dataset_id="did", dataset_commitment="dc", input_c="ic",
-             model="mid", spec="spec"):
-    return c2d._inspect_enclave_quote(
-        quote, dataset_id, dataset_commitment, input_c, model, _spec_commitment(spec)
+def _report_data(*, dataset_id="did", compute_spec="spec", output_commitment="oc", tamper_binding=False):
+    """The canonical report_data sha256(dataset_id + compute_spec_hash +
+    output_data_hash); tamper_binding binds a different output instead."""
+    if tamper_binding:
+        output_commitment = output_commitment + "-decoy"
+    output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
+    return expected_report_data(dataset_id, _spec_commitment(compute_spec), output_data_hash)
+
+
+def _binding(c2d, artifact, report_data, *, dataset_id="did", dataset_commitment="dc",
+             input_c="ic", model="mid", spec="spec"):
+    return c2d._check_job_binding(
+        artifact, report_data, dataset_id, dataset_commitment, input_c, model, _spec_commitment(spec)
     )
 
 
@@ -176,7 +147,7 @@ def test_is_hex_of_bytes_rejects_non_strings(c2d, non_string):
 
 
 # =============================================================================
-# _inspect_enclave_quote: output_commitment length bracket [1, 256]
+# _check_job_binding: output_commitment length bracket [1, 256]
 # =============================================================================
 
 @pytest.mark.parametrize(
@@ -189,59 +160,60 @@ def test_is_hex_of_bytes_rejects_non_strings(c2d, non_string):
     ],
 )
 def test_output_commitment_length_bracket(c2d, length, expect_ok, expect_code):
-    quote = _valid_quote(output_commitment="o" * length)
-    result = _inspect(c2d, quote)
+    output = "o" * length
+    result = _binding(c2d, _artifact(output_commitment=output), _report_data(output_commitment=output))
     assert result["ok"] is expect_ok
     assert result["code"] == expect_code
 
 
 def test_empty_output_commitment_is_invalid(c2d):
-    quote = _valid_quote(output_commitment="")
-    result = _inspect(c2d, quote)
+    result = _binding(c2d, _artifact(output_commitment=""), _report_data(output_commitment=""))
     assert result["ok"] is False
     assert result["code"] == "OUTPUT_COMMITMENT_INVALID"
 
 
 # =============================================================================
-# _inspect_enclave_quote: deterministic rejection codes for every tampered field
+# _check_job_binding: deterministic rejection codes for every tampered field
 # =============================================================================
 
 @pytest.mark.parametrize(
-    "quote_kwargs, on_chain, expect_code",
+    "artifact_kwargs, binding_kwargs, on_chain, expect_code",
     [
-        # A fully consistent quote verifies.
-        ({}, ("did", "dc", "ic", "mid", "spec"), "NONE"),
+        # A fully consistent artifact + report_data binds.
+        ({}, {}, ("did", "dc", "ic", "mid", "spec"), "NONE"),
         # Each committed artifact field must match the on-chain value.
-        ({}, ("did", "OTHER", "ic", "mid", "spec"), "DATASET_MISMATCH"),
-        ({}, ("did", "dc", "OTHER", "mid", "spec"), "INPUT_COMMITMENT_MISMATCH"),
-        ({}, ("did", "dc", "ic", "OTHER", "spec"), "MODEL_MISMATCH"),
-        # A quote built for a different compute spec fails the spec commitment check.
-        ({}, ("did", "dc", "ic", "mid", "different-spec"), "COMPUTE_SPEC_MISMATCH"),
+        ({}, {}, ("did", "OTHER", "ic", "mid", "spec"), "DATASET_MISMATCH"),
+        ({}, {}, ("did", "dc", "OTHER", "mid", "spec"), "INPUT_COMMITMENT_MISMATCH"),
+        ({}, {}, ("did", "dc", "ic", "OTHER", "spec"), "MODEL_MISMATCH"),
+        # An artifact for a different compute spec fails the spec commitment check.
+        ({}, {}, ("did", "dc", "ic", "mid", "different-spec"), "COMPUTE_SPEC_MISMATCH"),
         # Omitting the mandatory compute-spec commitment is rejected outright.
-        ({"include_compute_spec": False}, ("did", "dc", "ic", "mid", "spec"), "COMPUTE_SPEC_COMMITMENT_INVALID"),
-        # An unparseable binary quote fails the structural check; a forged binding
-        # is caught by the re-derived report_data comparison.
-        ({"malformed_quote": True}, ("did", "dc", "ic", "mid", "spec"), "MALFORMED_QUOTE"),
-        ({"tamper_binding": True}, ("did", "dc", "ic", "mid", "spec"), "BINDING_MISMATCH"),
+        ({"include_compute_spec": False}, {}, ("did", "dc", "ic", "mid", "spec"), "COMPUTE_SPEC_COMMITMENT_INVALID"),
+        # report_data sealed over different work is caught by the re-derived binding.
+        ({}, {"tamper_binding": True}, ("did", "dc", "ic", "mid", "spec"), "BINDING_MISMATCH"),
+        ({}, {"dataset_id": "other-dataset"}, ("did", "dc", "ic", "mid", "spec"), "BINDING_MISMATCH"),
     ],
 )
-def test_inspection_rejection_codes(c2d, quote_kwargs, on_chain, expect_code):
+def test_binding_rejection_codes(c2d, artifact_kwargs, binding_kwargs, on_chain, expect_code):
     dataset_id, dataset, input_c, model, spec = on_chain
-    quote = _valid_quote(**quote_kwargs)
-    result = _inspect(
-        c2d, quote, dataset_id=dataset_id, dataset_commitment=dataset,
-        input_c=input_c, model=model, spec=spec,
+    result = _binding(
+        c2d, _artifact(**artifact_kwargs), _report_data(**binding_kwargs),
+        dataset_id=dataset_id, dataset_commitment=dataset, input_c=input_c, model=model, spec=spec,
     )
     assert result["code"] == expect_code
     assert result["ok"] is (expect_code == "NONE")
 
 
-@pytest.mark.parametrize("malformed", ["", "not json", "{", "[]", '"a string"', "42", "null"])
-def test_malformed_quote_never_verifies(c2d, malformed):
-    """A non-object or unparseable quote is rejected deterministically, never raising."""
-    result = _inspect(c2d, malformed)
-    assert result["ok"] is False
-    assert result["code"] == "MALFORMED_QUOTE"
+@pytest.mark.parametrize(
+    "malformed",
+    ["", "not json", "{", "[]", '"a string"', "42", "null", '{"artifact": {}}', '{"dcap_quote": "00"}'],
+)
+def test_malformed_envelope_raises_evidence_error(c2d, malformed):
+    """A non-object or incomplete envelope is not evidence at all."""
+    with pytest.raises(c2d._EvidenceError) as excinfo:
+        c2d._parse_evidence_envelope(malformed)
+    assert excinfo.value.kind == "ATTESTATION"
+    assert excinfo.value.code == "MALFORMED_QUOTE"
 
 
 # =============================================================================
@@ -274,23 +246,98 @@ def test_expected_report_data_changes_when_any_field_changes(c2d, field_index):
     assert c2d._expected_report_data(*base) != c2d._expected_report_data(*mutated)
 
 
-def test_inspect_does_not_verify_signature(c2d):
-    """_inspect_enclave_quote performs only the deterministic structural + binding
-    checks; the ECDSA signature chain is verified separately. A structurally
-    sound quote with a correct binding therefore passes inspection, and the
-    module exposes no legacy on-chain signature re-derivation helpers."""
-    quote = _valid_quote()
-    result = _inspect(c2d, quote)
-    assert result["ok"] is True
-    assert result["code"] == "NONE"
-    # The legacy SHA-256 "signature" construction is gone for good.
-    assert not hasattr(c2d, "_quote_signature")
-    assert not hasattr(c2d, "_binding_digest")
-    assert not hasattr(c2d, "_authenticate_quote")
-    # Real ECDSA verification and binary DCAP parsing are present instead.
-    assert hasattr(c2d, "_ecdsa_verify")
-    assert hasattr(c2d, "_parse_dcap_quote")
-    assert hasattr(c2d, "_verify_quote_signature_chain")
+# =============================================================================
+# Genuine-format verifier surface: no stand-in path remains
+# =============================================================================
+
+def test_only_the_genuine_intel_verifier_is_present(c2d):
+    """The compact certificate chain parser, the simulated collateral
+    verifier and its domain tag, the placeholder measurements, and the second
+    pinned key they relied on are gone. What remains is the X.509 / CRL / PCS
+    collateral verifier anchored at the Intel SGX Root CA."""
+    for removed in (
+        "_parse_dcap_quote",
+        "_verify_quote_signature_chain",
+        "_verify_tcb_collateral",
+        "_inspect_enclave_quote",
+        "_CERT_DATA_TYPE_COMPACT",
+        "TCB_COLLATERAL_DOMAIN",
+        "REPORT_DATA_DOMAIN",
+        "DEFAULT_ATTESTATION_ENDPOINT",
+        "DEFAULT_ENCLAVE_MEASUREMENT",
+        "DEFAULT_ENCLAVE_SIGNER",
+        "INTEL_TCB_SIGNING_PUBKEY",
+    ):
+        assert not hasattr(c2d, removed), removed
+    for present in (
+        "_verify_sgx_evidence",
+        "_parse_sgx_quote",
+        "_parse_certificate",
+        "_parse_crl",
+        "_parse_sgx_extension",
+        "_evaluate_tcb_info",
+        "_evaluate_qe_identity",
+        "_ecdsa_verify",
+    ):
+        assert hasattr(c2d, present), present
+    assert c2d._Q_CERT_DATA_PCK_CHAIN == 5
+    assert c2d.INTEL_SGX_ROOT_CA_PUBKEY == INTEL_SGX_ROOT_CA_PUBKEY
+
+
+# =============================================================================
+# DER / ECDSA / signed-JSON strictness
+# =============================================================================
+
+@pytest.mark.parametrize(
+    "der",
+    [
+        "30",                  # truncated header
+        "3005020101",          # length overruns the buffer
+        "30810302010100",      # long-form length for a value < 128 (not minimal)
+        "3f0100",              # multi-byte tag
+        "308000",              # indefinite length
+    ],
+)
+def test_der_reader_rejects_non_der(c2d, der):
+    raw = bytes.fromhex(der)
+    with pytest.raises(ValueError):
+        c2d._der_items(raw, 0, len(raw))
+
+
+def test_ecdsa_verify_rejects_out_of_range_and_off_curve_inputs(c2d):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    key = ec.derive_private_key(0x1234, ec.SECP256R1())
+    nums = key.public_key().public_numbers()
+    pub = nums.x.to_bytes(32, "big") + nums.y.to_bytes(32, "big")
+    r, s = decode_dss_signature(key.sign(b"msg", ec.ECDSA(hashes.SHA256())))
+    sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    assert c2d._ecdsa_verify(pub, b"msg", sig) is True
+    assert c2d._ecdsa_verify(pub, b"msh", sig) is False
+    assert c2d._ecdsa_verify(pub, b"msg", b"\x00" * 64) is False
+    assert c2d._ecdsa_verify(pub, b"msg", c2d._P256_N.to_bytes(32, "big") + sig[32:]) is False
+    off_curve = pub[:63] + bytes([pub[63] ^ 1])
+    assert c2d._ecdsa_verify(off_curve, b"msg", sig) is False
+    assert c2d._ecdsa_verify(pub[:32], b"msg", sig) is False
+
+
+def test_signed_json_member_is_extracted_verbatim(c2d):
+    text = '{"tcbInfo":{"a":"}\\"","b":[1,{"c":2}]} ,"signature":"00"}'
+    assert c2d._json_member_text(text, "tcbInfo") == '{"a":"}\\"","b":[1,{"c":2}]}'
+    assert c2d._json_member_text(text, "signature") == '"00"'
+    with pytest.raises(ValueError):
+        c2d._json_member_text(text, "missing")
+
+
+def test_duplicate_keys_in_pcs_documents_are_rejected(c2d):
+    """A document with two tcbInfo members could make the signed text and the
+    parsed content diverge, so it is malformed collateral."""
+    text = '{"tcbInfo":{"id":"SGX"},"tcbInfo":{"id":"TDX"},"signature":"' + "00" * 64 + '"}'
+    with pytest.raises(c2d._EvidenceError) as excinfo:
+        c2d._signed_pcs_body(text, "tcbInfo", b"\x00" * 64, "TCB_INFO")
+    assert excinfo.value.code == "TCB_INFO_MALFORMED"
 
 
 # =============================================================================

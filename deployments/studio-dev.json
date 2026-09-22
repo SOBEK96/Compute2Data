@@ -1,13 +1,25 @@
 {
   "network": "GenLayer Studio-Dev (Studio Next)",
   "contract": "c2d_marketplace.py",
-  "contract_address": "0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9",
+  "contract_address": "0xA12282C872FB3416763399065cA63DAcD5e78a3C",
   "chain_id": 61997,
   "rpc": "https://studio-dev.genlayer.com/api",
   "explorer": "https://explorer-studio-dev.genlayer.com",
-  "explorer_address_url": "https://explorer-studio-dev.genlayer.com/address/0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9",
-  "deploy_tx_hash": "",
-  "deployer": "",
+  "explorer_address_url": "https://explorer-studio-dev.genlayer.com/address/0xA12282C872FB3416763399065cA63DAcD5e78a3C",
+  "deploy_tx_hash": "0xedc493d4bef8e22c43bd29c9356bc33e010725243e75807c9f31322a1f4c670a",
+  "deployer": "0x2e56c8579fa11cb144e6fd778da772061f4dd930",
+  "deployed_at": "2026-09-22",
+  "constructor_args": [],
   "status": "LIVE",
-  "notes": "Attestation front-end is a testnet stand-in (see docs/attestation-roadmap.md). deploy_tx_hash/deployer are unrecorded in this session; view the contract creation on the explorer_address_url."
+  "attestation": {
+    "sgx_root_ca_pubkey": "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f567918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394",
+    "intel_root_ca_pinned": true,
+    "quote_format": "Intel SGX ECDSA quote v3, cert_data_type 5 (X.509 PCK chain)",
+    "collateral_format": "Intel PCS v4: TCB Info v3, QE Identity v2, PCK CRL, Root CA CRL",
+    "accepted_tcb_statuses": [
+      "UpToDate"
+    ],
+    "trusted_enclaves": "none (operator whitelists the audited enclave)"
+  },
+  "notes": "Deployed with no constructor arguments: the genuine Intel SGX Root CA is pinned. Values under 'attestation' were read back from get_attestation_config on the live contract. Supersedes 0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9."
 }

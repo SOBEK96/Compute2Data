@@ -1,102 +1,85 @@
-# Response to Steward Gen. Dave — Attestation Finding
+# Response to Steward Gen. Dave — Authentic Attestation (Sep 21, 2026)
 
-**Re:** Finding that "the contract accepts a custom compact key chain and simulated
-collateral format rather than genuine Intel DCAP quote certificates and PCS collateral."
+**Re:** "The contract explicitly continues to accept a project-defined compact certificate
+chain and simulated collateral format, while genuine Intel X.509 PCK-chain and PCS
+collateral support remains future roadmap work."
 
-**Verdict from our side:** **You are correct, and we have stopped claiming otherwise.**
-
----
-
-## 1. Acknowledgment
-
-Your finding is accurate. The prior submission described the verifier as "authentic Intel
-SGX / DCAP" attestation. It is not. The contract verifies a **DCAP-shaped testnet
-stand-in**: the quote *certification* section uses a project-defined compact layout
-(`cert_data_type 0x0101`) instead of Intel's X.509 PCK chain (`cert_data_type 5`), and the
-TCB collateral is a project-defined JSON rather than Intel PCS TCB Info. We have removed the
-"authentic" framing from the contract, `README.md`, and `scripts/submit_proof.mjs`, and
-added `docs/attestation-roadmap.md` documenting the exact stand-in vs. production boundary.
-No verification *behavior* changed in this pass — only the claims were corrected to match
-what the code does.
-
-## 2. Why a stand-in is used (the unavoidable constraint)
-
-Genuine Intel DCAP attestation requires three inputs that cannot exist in a GenLayer testnet
-context:
-
-1. **Real SGX hardware** running the workload in an enclave and hardware-signing the quote.
-2. **Intel-provisioned PCK certificates** (per-platform X.509, issued by Intel PCS).
-3. **Live Intel PCS collateral** (TCB Info / QE Identity signed by Intel's TCB Signing key).
-
-Because none of these are available to the marketplace, any quote the project can produce is
-**necessarily self-signed under a repo-held key**. That is precisely the property a genuine
-verifier must *reject* — so presenting a self-signed vector as "genuine Intel" is not just
-imprecise, it is the exact failure mode you flagged. We chose to make the stand-in explicit
-rather than disguise it.
-
-## 3. What is genuine (and independently checkable)
-
-We want to be equally precise about what is **not** simulated, so the stand-in is not
-over-read as "nothing works":
-
-- **The ECDSA P-256 verifier (`_ecdsa_verify`) is real** — a from-scratch secp256r1
-  implementation (no C extensions are available in GenVM), correct group law + SHA-256 +
-  `r||s` encoding.
-- **The two pinned roots are the genuine Intel keys**, verified byte-for-byte against
-  Intel's published PCS material: `INTEL_SGX_ROOT_CA_PUBKEY` is Intel's SGX Root CA public
-  key, and `INTEL_TCB_SIGNING_PUBKEY` is Intel's SGX TCB Signing key.
-- **A default (production-style) deployment anchors to those genuine Intel roots**, and under
-  that deployment our own harness-minted stand-in quotes are **rejected**. This is asserted
-  by `tests/direct/test_authentic_attestation.py::test_production_default_anchors_to_intel_root_and_rejects_test_keys`,
-  which expects `PCK_CHAIN_INVALID`. The test harness signs under deliberately *different*
-  TEST anchors, so our passing tests can never forge under the genuine Intel root.
-- **The DCAP quote header and 384-byte report body offsets already match real DCAP v3.** The
-  stand-in is confined to the certification section and the collateral format.
-
-In short: the *trust anchors* and the *crypto primitive* are production-grade; the *quote
-certificate format*, the *collateral format*, and the *enclave producer* are the stand-in.
-
-## 4. The production path is decoupled by design
-
-The verifier is deliberately structured so the stand-in can be swapped for genuine Intel
-formats **without touching** the settlement state machine (escrow / slash / appeal), the
-`report_data` binding scheme, or the pinned Intel roots. The full plan is in
-`docs/attestation-roadmap.md §4`; the essentials:
-
-1. **X.509 PCK chain ingestion** — replace the compact-cert parse in
-   `_verify_quote_signature_chain` with a DER/PEM path builder over `cert_data_type 5`
-   (PCK leaf → Intel PCK CA → Intel SGX Root CA), reusing the existing `_ecdsa_verify` and
-   the already-genuine root anchor, and extracting FMSPC/TCB from the SGX extensions.
-2. **Genuine PCS collateral** — replace the stand-in JSON in `_verify_tcb_collateral` with
-   Intel PCS TCB Info + QE Identity parsing: verify the signature over canonical `tcbInfo`
-   bytes against the (already-genuine) `INTEL_TCB_SIGNING_PUBKEY`, evaluate the platform
-   against the `tcbLevels` array, and honor `nextUpdate`.
-3. **QE Identity enforcement** — validate the Quoting Enclave against Intel's published QE
-   identity, not just its structure.
-4. **Real report_data provenance** — bind `MRENCLAVE` to the published C2D workload image so
-   `report_data` is a hardware fact, not a harness convention. (Off-chain enclave build; not
-   a contract change.)
-
-Steps 1–3 are contained changes to two functions plus their fixtures; every downstream
-escrow/appeal test is unaffected. This is why we are comfortable exercising the settlement
-logic today on the stand-in while the hardware/PCS integration proceeds in parallel.
-
-## 5. What we are asking of you
-
-We are **not** asking you to accept the stand-in as genuine attestation. We are asking you to
-review the *settlement logic* (escrow, slashing, appeals, consensus review) against a
-transparently-labeled simulator, with the understanding that the attestation front-end is a
-drop-in replacement tracked in `docs/attestation-roadmap.md`. When real SGX hardware and
-Intel PCS access are available, steps 1–3 land behind the same pinned genuine roots that are
-*already* in the contract today.
-
-Thank you for the finding — it was correct, and it made the codebase more honest.
-
-— Compute2Data engineering
+**Resolution:** Genuine Intel X.509 PCK-chain and Intel PCS collateral verification is now
+implemented in the contract and deployed. The compact certificate chain and the simulated
+collateral format are no longer accepted anywhere: they revert.
 
 ---
 
-**Current deployment (testnet stand-in):**
-`0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9` on GenLayer Studio-Dev (Studio Next, Chain ID
-`61997`) —
-<https://explorer-studio-dev.genlayer.com/address/0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9>
+## 1. What changed in the contract
+
+| Before | Now |
+|--------|-----|
+| Certification data `cert_data_type 0x0101`: raw P-256 keys plus signatures (project-defined) | Only Intel `cert_data_type 5`: the PEM X.509 PCK chain from the quote, DER-parsed and verified on chain (PCK → PCK Processor/Platform CA → Intel SGX Root CA). Any other type reverts with `ERR_INVALID_ATTESTATION … (CERT_DATA_TYPE_UNSUPPORTED)` |
+| Collateral `{fmspc, tcbStatus, signature}` under a project domain tag, fetched from an admin-set endpoint | Intel PCS v4 collateral exactly as Intel serves it: TCB Info v3, QE Identity v2, their TCB Signing issuer chains, the PCK CRL, and the Root CA CRL. All signatures are verified on chain to the pinned Intel root; freshness, FMSPC, and PCE-ID are enforced. Anything else reverts with `ERR_INVALID_COLLATERAL … (<code>)` |
+| Separately pinned TCB Signing key; `set_attestation_endpoint` | Single trust anchor: the Intel SGX Root CA key. The TCB Signing certificate is verified to it and checked against the Root CA CRL. The endpoint setter is removed |
+| No revocation checking | The Root CA CRL and PCK CRL are verified; revoked PCK CA or PCK certificates are rejected |
+| QE not checked against Intel's identity | The QE report must match Intel's QE Identity (MRSIGNER, ISVPRODID, masked MISCSELECT / ATTRIBUTES); the QE TCB level is evaluated |
+| Placeholder trusted measurements (`11…`, `22…`) shipped at deploy | The trust registry starts empty; the operator whitelists the audited enclave |
+
+The full specification is in [`docs/attestation.md`](attestation.md). The verifier is
+`_verify_sgx_evidence` in `contracts/c2d_marketplace.py`.
+
+## 2. How to check it against genuine Intel material
+
+`test/fixtures/intel_sgx/` contains a **real SGX quote issued on Intel hardware** (the
+public `dcap-qvl` sample; its PCK chain ends at the real Intel SGX Root CA) and the
+**real Intel PCS collateral** for its FMSPC, fetched from `api.trustedservices.intel.com`.
+
+`tests/direct/test_authentic_attestation.py` shows:
+
+- The production-default contract (Intel root pinned, no test anchors) authenticates this
+  quote and collateral on chain. It computes platform TCB status
+  `OutOfDateConfigurationNeeded` and QE status `UpToDate`. Phala's independent
+  `dcap-qvl` verifier gives the same status for the same inputs.
+- With that quote submitted as a proof, the contract gets past every authenticity check
+  and then applies policy: it slashes on the non-accepted TCB status, or, once the status
+  is accepted and the enclave whitelisted, on `BINDING_MISMATCH`, because the quote's
+  report_data (`Hello, world!`) does not bind the job.
+- Flipping one byte of the genuine quote reverts (`SIGNATURE_INVALID`), as does flipping
+  one byte of the genuine TCB Info (`TCB_INFO_SIGNATURE_INVALID`), pairing the quote with
+  genuine TCB Info for another FMSPC (`TCB_INFO_FMSPC_MISMATCH`), or verifying after the
+  collateral's `nextUpdate` (`PCK_CRL_EXPIRED`).
+
+Negative regressions in the same file:
+
+- `test_revert_on_project_defined_compact_certificate`: the formerly accepted compact
+  chain reverts in its original form and inside an otherwise-valid Intel header.
+- `test_revert_on_simulated_collateral_format`: the former collateral JSON is rejected
+  in every position, as are unsigned, foreign-signed, expired, wrong-FMSPC, and
+  untrusted-root collateral. A zero-value stake or an unbacked bond reverts with
+  `ERR_INVALID_COLLATERAL`.
+- `test_report_data_cryptographic_mismatch`: a genuine quote bound to other work is
+  slashed; a report_data edited after signing reverts.
+
+Result: `./run_tests.sh` → 202 passed (lint + validation + direct suites).
+
+## 3. Deployment
+
+Studio-Dev (chain 61997), deployed with **no constructor arguments**:
+
+- Contract: `0xA12282C872FB3416763399065cA63DAcD5e78a3C`
+  (<https://explorer-studio-dev.genlayer.com/address/0xA12282C872FB3416763399065cA63DAcD5e78a3C>)
+- Deploy tx: `0xedc493d4bef8e22c43bd29c9356bc33e010725243e75807c9f31322a1f4c670a`
+  (consensus `ACCEPTED`)
+- `get_attestation_config()` on the live contract returns
+  `intel_root_ca_pinned: true`, the Intel SGX Root CA key,
+  `quote_format: "Intel SGX ECDSA quote v3, cert_data_type 5 (X.509 PCK chain)"`, and
+  `accepted_tcb_statuses: ["UpToDate"]`. `tests/integration/test_migration_smoke.py`
+  asserts this against the live node.
+
+## 4. Scope, stated plainly
+
+- The quote format is SGX ECDSA v3 with `cert_data_type 5`, which is what the Intel
+  DCAP quote library emits for SGX enclaves. TDX and v4 envelopes are rejected.
+- A settling proof requires a real enclave on an Intel SGX platform, and that enclave
+  must write the job binding into report_data. The job-lifecycle tests use a harness
+  PKI in Intel's exact formats under a test root, because a public Intel quote cannot
+  bind a test job. The production default rejects that harness root
+  (`test_production_default_rejects_harness_signed_chain`).
+- The prover supplies collateral with the proof. It is accepted only inside Intel's
+  signed validity windows (30 days for TCB Info, QE Identity, and the PCK CRL).

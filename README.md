@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Network-GenLayer%20StudioNet-00E5FF?style=for-the-badge&logo=ethereum" alt="Network" />
   <img src="https://img.shields.io/badge/Language-Python%20GenVM-3776AB?style=for-the-badge&logo=python" alt="Python" />
   <img src="https://img.shields.io/badge/Frontend-Next.js%2014-000000?style=for-the-badge&logo=next.js" alt="Next.js" />
-  <img src="https://img.shields.io/badge/Tests-11%2F11%20Passed%20(100%25)-10B981?style=for-the-badge" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-202%2F202%20Passed%20(100%25)-10B981?style=for-the-badge" alt="Tests" />
   <img src="https://img.shields.io/badge/Spec--Kit-SDD%20Ratified-8B5CF6?style=for-the-badge" alt="Spec Kit" />
   <img src="https://img.shields.io/badge/Author-Saeid%20(%40Handik4)-6366F1?style=for-the-badge" alt="Author" />
   <img src="https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge" alt="License" />
@@ -64,14 +64,16 @@ sequenceDiagram
     Contract-->>Researcher: 3 GEN Escrowed (Job Status: FUNDED)
     Contract-->>Provider: 2 GEN Job Collateral Locked
 
-    Note over Provider,Enclave: Phase 3: Enclave Execution
+    Note over Provider,Enclave: Phase 3: Enclave Execution (Intel SGX)
     Provider->>Enclave: Run model on private dataset rows
-    Enclave-->>Provider: Generate output hash & execution proof metadata
+    Enclave-->>Provider: SGX quote v3 (report_data binds dataset, spec, output)
+    Provider->>Provider: fetch_pcs_collateral.mjs (Intel PCS TCB Info, QE Identity, CRLs)
 
-    Note over Provider,Quorum: Phase 4: Non-Deterministic AI Verification
-    Provider->>Contract: submit_execution_proof(job_id, proof_metadata, proof_hash)
-    Contract->>Quorum: gl.vm.run_nondet_unsafe(assess_proof, validate_assessment)
-    Quorum->>Quorum: Cross-LLM Evaluation against Cryptographic Commitments
+    Note over Provider,Quorum: Phase 4: On-Chain DCAP Verification + AI Review
+    Provider->>Contract: submit_execution_proof(job_id, {artifact, dcap_quote, collateral}, output)
+    Contract->>Contract: Verify X.509 PCK chain, CRLs, TCB Info, QE Identity to Intel SGX Root CA
+    Contract->>Quorum: gl.vm.run_nondet(assess_report, validate_assessment)
+    Quorum->>Quorum: Cross-LLM Review of the Verified Report
 
     alt Verdict: VALID (Consensus Achieved)
         Quorum-->>Contract: Verdict: VALID | Violation: NONE
@@ -79,8 +81,8 @@ sequenceDiagram
         Contract-->>Contract: Increment Provider Reputation Score
     else Verdict: INVALID / MALICIOUS
         Quorum-->>Contract: Verdict: INVALID | Violation: MODEL_MISMATCH
-        Contract->>Researcher: Refund 3 GEN Escrow + 12 GEN Slashing Reward
-        Contract-->>Provider: Slash 12 GEN Collateral & Deactivate Dataset
+        Contract->>Researcher: Refund 3 GEN Escrow
+        Contract-->>Provider: Slash 12 GEN Collateral to Treasury & Deactivate Dataset
     else Requester Timeout
         Researcher->>Contract: cancel_expired_job(job_id)
         Contract->>Researcher: 100% Escrow Refunded (3 GEN)
@@ -92,7 +94,7 @@ sequenceDiagram
 
 ## 🧠 Intelligent Contract Deep Dive (v2.0)
 
-The contract is written in Python for the **GenVM** sandbox, pinned to runner `# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }`.
+The contract is written in Python for the **GenVM** sandbox, pinned to runner `# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }`.
 
 ### 1. Storage Layout & Data Structures
 ```python
@@ -138,20 +140,20 @@ class ComputeJob:
 
 | Category | Method | Access / Type | Description |
 | :--- | :--- | :--- | :--- |
-| **Staking** | `stake_provider()` | `write.payable` | Deposits GEN collateral into the provider balance. |
+| **Staking** | `stake_provider()` | `write.payable` | Deposits native GEN (`gl.message.value`) as provider collateral; a zero-value stake reverts with `ERR_INVALID_COLLATERAL`. |
 | **Staking** | `withdraw_stake(amount)` | `write` | Withdraws unbonded available stake to provider wallet. |
 | **Datasets** | `register_dataset(...)` | `write` | Locks `10 GEN` listing bond and registers dataset metadata. |
 | **Datasets** | `set_dataset_active(...)` | `write` | Toggles dataset availability; unlocks the listing bond when deactivated with 0 open jobs. |
 | **Compute** | `request_compute(...)` | `write.payable` | Escrows compute payment and locks `2 GEN` provider collateral. |
 | **Compute** | `cancel_expired_job(id)` | `write` | **[v2.0]** Cancels pending job after its deadline, refunds 100% escrow to requester. |
-| **Verification**| `submit_execution_proof(...)`| `write` | DCAP-shaped parse + `report_data` binding + **on-chain ECDSA chain to the deployed root anchor (stand-in cert layout)** + stand-in TCB collateral, then Multi-LLM consensus review. |
-| **Attestation** | `set_attestation_endpoint(url)` | `write` | **[admin]** Repoints the stand-in collateral endpoint (https only); trust is rooted in the pinned keys, not the endpoint. |
+| **Verification**| `submit_execution_proof(...)`| `write` | Verifies an Intel SGX quote v3 (X.509 PCK chain, `cert_data_type 5`) and Intel PCS collateral **on chain to the pinned Intel SGX Root CA**, applies TCB / trust-registry / `report_data` binding policy, then Multi-LLM consensus review. Non-genuine evidence reverts. |
+| **Attestation** | `set_accepted_tcb_status(status, accepted)` | `write` | **[admin]** Accepts an additional Intel TCB status (default: only `UpToDate`; `Revoked` can never be accepted). |
 | **Attestation** | `set_trusted_enclave / set_trusted_signer` | `write` | **[admin]** Manages the `MRENCLAVE` / `MRSIGNER` trust registry. |
 | **Disputes** | `appeal_job_verdict(...)` | `write.payable` | **[v2.0]** Files formal dispute with `1 GEN` appeal bond. |
-| **Disputes** | `resolve_appeal(id)` | `write` | Re-verifies the appeal evidence through the same on-chain DCAP pipeline; accept reverses the verdict, reject finalizes it. |
+| **Disputes** | `resolve_appeal(id)` | `write` | Re-verifies the appeal evidence through the same on-chain Intel DCAP pipeline; accept reverses the verdict, reject finalizes it. |
 | **Disputes** | `claim_unresolved_appeal(id)` | `write` | **Failsafe** for an unresolved/no-quorum appeal: returns the bond and, for an inconclusive-origin appeal, fully releases escrow + collateral. |
 | **Analytics** | `get_marketplace_stats()` | `view` | **[v2.0]** Returns TVL, total escrow, slashed funds, job counts. |
-| **Attestation** | `get_attestation_config()` | `view` | Returns the collateral endpoint, acceptable TCB status, and the deployed root / TCB signing anchors (genuine Intel keys by default; test anchors under the direct-test deploy). |
+| **Attestation** | `get_attestation_config()` | `view` | Returns the pinned root key, whether it is the Intel SGX Root CA, the accepted quote / collateral formats, and the accepted TCB statuses. |
 | **Analytics** | `get_provider_reputation(addr)`| `view` | **[v2.0]** Computes provider reliability percentage (0-100%). |
 | **Queries** | `get_dataset(id)` | `view` | Returns complete metadata for a dataset. |
 | **Queries** | `list_dataset_ids()` | `view` | Returns list of all registered dataset keys. |
@@ -186,8 +188,9 @@ Compute2Dataata follows the rigorous **Spec-Driven Development (SDD)** process p
 | **Native Token** | **GEN** |
 | **RPC Endpoint** | `https://studio-dev.genlayer.com/api` |
 | **Explorer** | `https://explorer-studio-dev.genlayer.com` |
-| **Active Contract (attestation stand-in)** | [`0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9`](https://explorer-studio-dev.genlayer.com/address/0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9) |
-| **Deployment Record** | Contract creation tx, deployer, and consensus receipt viewable on the [Studio-Dev explorer](https://explorer-studio-dev.genlayer.com/address/0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9) |
+| **Active Contract** | [`0xA12282C872FB3416763399065cA63DAcD5e78a3C`](https://explorer-studio-dev.genlayer.com/address/0xA12282C872FB3416763399065cA63DAcD5e78a3C) |
+| **Deploy Tx** | `0xedc493d4bef8e22c43bd29c9356bc33e010725243e75807c9f31322a1f4c670a` (consensus `ACCEPTED`, no constructor args) |
+| **Attestation Root** | Intel SGX Root CA pinned (`get_attestation_config().intel_root_ca_pinned == true`); see [`deployments/studio-dev.json`](deployments/studio-dev.json) |
 
 ---
 
@@ -215,8 +218,9 @@ Expected output:
 ✓ Lint passed (3 checks)
 ✓ Validation passed
   Contract: C2DMarketplace
-  Methods: 17 (8 view, 9 write)
-============================== 11 passed in 0.26s ==============================
+  Methods: 23 (10 view, 13 write)
+...
+202 passed
 ```
 
 ### 3. Start the Modern Next.js 14 Web App
@@ -240,10 +244,9 @@ where:
 - $B_{\text{job}} = 2 \text{ GEN}$ (Per-job active execution bond)
 
 ### 2. Slashing Equation
-Upon an `INVALID` verdict, the slashed penalty $S$ awarded to the researcher is:
+Upon an `INVALID` verdict, the provider is slashed:
 $$S = B_{\text{job}} + B_{\text{listing}} = 12 \text{ GEN}$$
-The researcher receives a total settlement $R$:
-$$R = \text{Funded Escrow} + S = 3 \text{ GEN} + 12 \text{ GEN} = 15 \text{ GEN}$$
+The researcher is refunded the funded escrow ($3 \text{ GEN}$). The slashed $S$ is held by the protocol treasury (`total_slashed`) so that an accepted appeal can restore it to the provider.
 
 ### 3. Dynamic Provider Reputation
 The on-chain reputation score $\rho \in [0, 100]$ is computed deterministically:
@@ -267,62 +270,72 @@ UNTRUSTED_EVIDENCE_JSON_END
 2. **Reentrancy Protection**: GenLayer's transaction model and `_Recipient.emit_transfer(..., on="finalized")` prevents cross-contract reentrancy.
 3. **Deterministic State Guards**: All state checks (balance validation, permissions, existence) occur in deterministic Python *before* entering `gl.vm.run_nondet_unsafe`.
 
-### 🔒 Testnet Attestation Stand-in (DCAP-shaped) — and the Production Roadmap
+### 🔒 Intel SGX DCAP Attestation (verified on chain)
 
-> **This contract ships a _testnet attestation stand-in_ that simulates the shape of Intel
-> SGX / DCAP verification so the escrow / slash / appeal state machine can be exercised end
-> to end on GenLayer testnet. It is NOT a genuine Intel DCAP quote verifier. See
-> [`docs/attestation-roadmap.md`](docs/attestation-roadmap.md) for the exact stand-in vs.
-> production boundary.**
+Every execution proof must be a genuine **Intel SGX DCAP attestation**, and the contract
+verifies it entirely on chain against the pinned **Intel SGX Root CA** public key
+(`INTEL_SGX_ROOT_CA_PUBKEY`). The full specification is in
+[`docs/attestation.md`](docs/attestation.md).
 
-**What is genuine.** The two pinned roots of trust ARE the real Intel keys, verified
-byte-for-byte against Intel's published PCS material:
+A proof is the envelope `{artifact, dcap_quote, collateral}`:
 
-- `INTEL_SGX_ROOT_CA_PUBKEY` == public key of Intel's
-  `Intel_SGX_Provisioning_Certification_RootCA.pem` (CN=Intel SGX Root CA).
-- `INTEL_TCB_SIGNING_PUBKEY` == public key of the *Intel SGX TCB Signing* cert served in the
-  PCS v4 TCB-Info issuer chain.
+- `dcap_quote`: the Intel SGX ECDSA quote (v3) produced by the provider's enclave. Its
+  certification data is Intel's `cert_data_type 5` X.509 PCK certificate chain.
+- `collateral`: the Intel PCS v4 collateral for the quote's platform (TCB Info, QE
+  Identity, their TCB Signing issuer chains, the PCK CRL, and the Root CA CRL), fetched
+  verbatim from Intel by [`scripts/fetch_pcs_collateral.mjs`](scripts/fetch_pcs_collateral.mjs).
 
-The on-chain ECDSA P-256 verifier (`_ecdsa_verify`) is a real, from-scratch secp256r1
-implementation. A default (production-style) deployment pins these genuine Intel roots, so a
-stand-in quote minted by the test harness is **rejected** — the stand-in cannot pose as real
-traffic.
+The verification is deterministic and makes no network calls:
 
-**What is a stand-in (and why the reviewer's finding is correct).** The **quote
-certification data** and the **TCB collateral** use a simplified, *project-defined* layout —
-**not** Intel's real X.509 PCK certificate chain (`cert_data_type 5`) and **not** Intel's
-real PCS TCB Info JSON. A genuine Intel-issued quote/collateral will **not** parse here. There
-is also **no real SGX enclave**: the `report_data` binding is a convention this simulator
-enforces, which only a real enclave running the workload on real hardware could produce
-authentically.
+1. **Quote structure.** Version 3, ECDSA-P256 attestation key, Intel QE vendor id, and
+   exact section lengths.
+2. **X.509 PCK chain.** Strict DER parsing. The chain runs PCK → PCK Processor/Platform
+   CA → Intel SGX Root CA. Names, CA constraints, validity, and every ECDSA signature
+   are checked, and the root must equal the pinned Intel key.
+3. **Revocation.** The Intel-signed Root CA CRL and PCK CRL are checked; neither the PCK
+   CA nor the PCK certificate may be revoked.
+4. **Quote signatures.** The PCK key signs the QE report, the QE report binds the
+   attestation key, and the attestation key signs the enclave report.
+5. **PCS collateral.** The TCB Info and QE Identity signatures are verified over the
+   exact signed bytes with the Intel SGX TCB Signing certificate, which is itself
+   verified to the pinned root. Freshness (`nextUpdate`) is enforced, and the
+   FMSPC / PCE-ID must match the PCK certificate.
+6. **TCB evaluation.** The PCK certificate's SGX TCB SVNs select the Intel TCB level.
+   The QE report must match Intel's QE Identity.
 
-The simulated verification path (deterministic except the collateral fetch, wrapped in
-`gl.eq_principle.strict_eq`):
+**Fail-closed.** Evidence that is not a genuine Intel attestation reverts. This covers
+any other certification format (including the compact key chain `0x0101` that earlier
+versions accepted), any other collateral shape (including the former
+`{fmspc, tcbStatus, signature}` JSON), a bad signature, an untrusted root, a revoked
+certificate, or stale collateral. The revert reads
+`ERR_INVALID_ATTESTATION: non-genuine certificate chain rejected (<code>)` or
+`ERR_INVALID_COLLATERAL: simulated collateral format rejected (<code>)`, and the job
+stays `FUNDED`. A **genuine** attestation that fails policy is slashed
+deterministically: a TCB status the operator has not accepted, a debug enclave, a
+MRENCLAVE / MRSIGNER that is not whitelisted, or a `report_data` that does not equal
+`sha256(dataset_id ‖ sha256(compute_spec) ‖ sha256(output)) ‖ 0³²`.
 
-1. **DCAP-shaped quote parse (`_parse_dcap_quote`).** Quote Header + ISV Enclave Report
-   (`MRENCLAVE`, `MRSIGNER`, `ISV_SVN`, 64-byte `report_data`) read from fixed byte offsets
-   (`MALFORMED_QUOTE` / `UNSUPPORTED_QUOTE` otherwise). Header/report offsets match real DCAP;
-   the certification section does not.
-2. **Report-data binding (`_expected_report_data`, network-free).**
-   `report_data = sha256(dataset_id + compute_spec_hash + output_data_hash)`, plus artifact
-   fields cross-checked against the on-chain job (`BINDING_MISMATCH`, `DATASET_MISMATCH`,
-   `INPUT_COMMITMENT_MISMATCH`, `MODEL_MISMATCH`, `COMPUTE_SPEC_MISMATCH`).
-3. **Stand-in signature chain (`_verify_quote_signature_chain`).** Real ECDSA P-256 checks over
-   the *compact stand-in* cert layout, up to the deployed root anchor (`SIGNATURE_INVALID`,
-   `QE_BINDING_INVALID`, `QE_SIGNATURE_INVALID`, `PCK_CHAIN_INVALID`).
-4. **Trust registry.** Recovered `MRENCLAVE` / `MRSIGNER` must be admin-whitelisted
-   (`UNTRUSTED_ENCLAVE` / `UNTRUSTED_SIGNER`).
-5. **Stand-in TCB collateral (`_verify_tcb_collateral`).** Fetched over `gl.nondet.web.get`,
-   its ECDSA signature verified against the pinned Intel TCB signing key; a non-`UpToDate` or
-   unsigned response is rejected (`COLLATERAL_SIGNATURE_INVALID`, `TCB_*`,
-   `ATTESTATION_HTTP_5xx`). The JSON shape is the project-defined stand-in, not Intel PCS TCB
-   Info.
+**Collateral escrow.** Provider stake is native GEN only: it is transferred with
+`stake_provider()` and held by the contract. Listing bonds and per-job collateral are
+locked out of that stake. A zero-value stake, or a bond or job the available native
+stake cannot cover, reverts with `ERR_INVALID_COLLATERAL`.
 
-The collateral endpoint is admin-configurable via `set_attestation_endpoint(...)` (https
-only); the pinned anchors are exposed through `get_attestation_config()`. This path is
-verified end-to-end in `tests/direct/test_authentic_attestation.py` against **stand-in**
-DCAP-shaped fixtures signed with real ECDSA P-256 keys — including a production-default test
-that proves harness-minted quotes are **rejected** under the genuine Intel anchors.
+**Evidence.** `tests/direct/test_authentic_attestation.py` verifies a **real
+Intel-issued SGX quote** against the **real Intel PCS collateral** for its FMSPC on the
+production default deployment. The on-chain TCB result (`OutOfDateConfigurationNeeded`)
+is identical to Phala's independent `dcap-qvl` verifier (see
+[`test/fixtures/intel_sgx/README.md`](test/fixtures/intel_sgx/README.md)). Tampering
+with any genuine byte reverts. The same file carries the fail-closed regressions:
+
+- `test_revert_on_project_defined_compact_certificate`
+- `test_revert_on_simulated_collateral_format`
+- `test_report_data_cryptographic_mismatch`
+
+**Operating requirements.** A proof can only be produced by an enclave on an Intel SGX
+platform that holds an Intel-issued PCK certificate, and that enclave writes the job
+binding into `report_data`. The contract's trust registry starts empty: the operator
+audits the enclave and whitelists its MRENCLAVE / MRSIGNER (`set_trusted_enclave`,
+`set_trusted_signer`) before any proof can settle.
 
 ### ⚖️ Inconclusive & Unresolved Appeal Handling
 
@@ -342,8 +355,10 @@ deterministically — funds can **never** be stranded, even when consensus canno
   slashed**, because the protocol could not establish fault (`total_slashed` is
   unchanged; the job settles to `CANCELLED` with reason `APPEAL_INCONCLUSIVE_RELEASED`).
 - **Adjudicated appeal.** `resolve_appeal` re-runs the appeal evidence through the same
-  stand-in attestation path: an accept restores/settles funds to the provider, a reject
-  finalizes the slash and forfeits the bond to the requester.
+  on-chain Intel DCAP verification and policy: an accept restores/settles funds to the
+  provider, a reject finalizes the slash and forfeits the bond to the requester. Filing
+  an appeal requires genuine evidence; evidence that no longer verifies at adjudication
+  rejects the appeal.
 
 This failsafe is proven by
 `tests/direct/test_compute_data_regression.py::test_unresolved_inconclusive_appeal_releases_escrow_and_collateral`,
@@ -359,11 +374,20 @@ Compute2Dataata/
 │   └── c2d_marketplace.py         # 🐍 GenLayer Intelligent Contract (v2.0)
 ├── test/
 │   ├── conftest.py                # 🧪 Pytest Fixtures & Mocks
-│   └── test_c2d_marketplace.py   # 🧪 11 Unit & Attack Scenario Tests
+│   ├── dcap_fixtures.py           # 🔐 Intel-format X.509 / PCS harness + genuine vector loaders
+│   ├── fixtures/intel_sgx/        # 🔐 Genuine Intel SGX quote + Intel PCS collateral
+│   └── test_c2d_*.py              # 🧪 Unit & attack scenario tests
+├── tests/
+│   ├── direct/                    # 🧪 Attestation, regression, boundary, consensus suites
+│   └── integration/               # 🌐 Live read-only checks against studio-dev
+├── docs/
+│   └── attestation.md             # 🔐 On-chain Intel SGX DCAP verification spec
 ├── specs/                         # 📜 GitHub Spec Kit Specifications
 │   ├── 001-compute2data-autonomous-marketplace/
 │   └── 002-c2d-contract-levelup/
 ├── scripts/
+│   ├── fetch_pcs_collateral.mjs   # 🔐 Fetch Intel PCS collateral for an SGX quote
+│   ├── submit_proof.mjs           # 📤 Relay a proof envelope to the contract
 │   ├── fresh_deploy.mjs           # 🚀 Deployment Script
 │   └── init_new_contract.mjs      # ⚡ Genesis On-Chain Staking & Registration
 ├── apps/

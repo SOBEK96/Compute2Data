@@ -39,6 +39,7 @@ import {
   appealJobVerdict,
   buildAttestationQuote,
   isContractConfigured,
+  parsePcsCollateral,
   readProvider,
   readProviderJobs,
   readProviderReputation,
@@ -195,10 +196,11 @@ export function ProviderConsole() {
   const [datasetCommitment, setDatasetCommitment] = useState("sha256:credit-graph-commitment-2026-v3");
   const [outputCommitment, setOutputCommitment] = useState("sha256:gnn-embeddings-final-weights-verified");
   const [resultStatus, setResultStatus] = useState("COMPLETED");
-  // The genuine binary DCAP quote (hex) emitted by the provider's enclave. The
-  // browser never derives this; it is parsed and its ECDSA chain verified on
-  // chain. Left blank it is rejected as an unparseable/unauthenticated quote.
+  // The SGX quote (hex) emitted by the provider's enclave and the Intel PCS
+  // collateral JSON from scripts/fetch_pcs_collateral.mjs. The browser never
+  // derives either; both are verified on chain to the pinned Intel root.
   const [enclaveQuoteHex, setEnclaveQuoteHex] = useState("");
+  const [pcsCollateralJson, setPcsCollateralJson] = useState("");
   const [tamperModel, setTamperModel] = useState(false);
   const [proofAction, setProofAction] = useState<ActionState>({ phase: "idle" });
   const [appealAction, setAppealAction] = useState<ActionState>({ phase: "idle" });
@@ -287,7 +289,7 @@ export function ProviderConsole() {
     if (!selectedJob || !account) return connect();
     setProofAction({
       phase: "pending",
-      message: "Building enclave quote & verifying artifact binding on-chain...",
+      message: "Submitting SGX quote + Intel PCS collateral for on-chain verification...",
     });
     try {
       const attestationQuote = await buildAttestationQuote({
@@ -299,6 +301,7 @@ export function ProviderConsole() {
         outputCommitment: outputCommitment.trim(),
         resultStatus,
         dcapQuoteHex: enclaveQuoteHex.trim(),
+        collateral: parsePcsCollateral(pcsCollateralJson),
       });
       await submitExecutionProof(account, {
         jobId: selectedJob.jobId,
@@ -307,7 +310,7 @@ export function ProviderConsole() {
       });
       setProofAction({
         phase: "success",
-        message: "Attestation submitted. Deterministic binding verified; validator quorum reviewed the report.",
+        message: "Attestation verified on chain to the Intel SGX Root CA; validator quorum reviewed the report.",
       });
       await loadOnChainData();
     } catch (err: any) {
@@ -328,6 +331,7 @@ export function ProviderConsole() {
         outputCommitment: outputCommitment.trim(),
         resultStatus: "COMPLETED",
         dcapQuoteHex: enclaveQuoteHex.trim(),
+        collateral: parsePcsCollateral(pcsCollateralJson),
       });
       await appealJobVerdict(account, {
         jobId: selectedJob.jobId,
@@ -743,10 +747,10 @@ export function ProviderConsole() {
             </div>
 
             <p className="rounded-xl border border-line/70 bg-elevated/40 p-3 text-[11px] leading-relaxed text-muted">
-              The contract derives the report data as
-              <span className="font-mono text-cobalt-200"> sha256(dataset || input || model || output)</span> and
-              rejects any quote whose binding, trusted measurement, or signature does not verify. No provider
-              prose is trusted.
+              The contract verifies the quote&apos;s Intel X.509 PCK chain, the Intel CRLs and the signed TCB Info /
+              QE Identity on chain to the pinned Intel SGX Root CA, then requires report data equal to
+              <span className="font-mono text-cobalt-200"> sha256(dataset_id || sha256(spec) || sha256(output))</span>.
+              Non-genuine evidence reverts; genuine evidence that fails policy is slashed. No provider prose is trusted.
             </p>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -790,12 +794,24 @@ export function ProviderConsole() {
               </div>
               <div className="md:col-span-2">
                 <label className="label-caps block text-[9px] text-muted">
-                  Binary DCAP Quote — hex (from your TEE — parsed &amp; ECDSA-verified on chain)
+                  Intel SGX Quote v3 — hex (from your enclave; X.509 PCK chain verified on chain)
                 </label>
                 <input
                   value={enclaveQuoteHex}
                   onChange={(e) => setEnclaveQuoteHex(e.target.value)}
-                  placeholder="Paste the hex-encoded binary DCAP quote emitted by your enclave"
+                  placeholder="Paste the hex-encoded SGX ECDSA quote emitted by your enclave"
+                  className="field mt-1 font-mono text-xs"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="label-caps block text-[9px] text-muted">
+                  Intel PCS Collateral — JSON (from scripts/fetch_pcs_collateral.mjs)
+                </label>
+                <textarea
+                  value={pcsCollateralJson}
+                  onChange={(e) => setPcsCollateralJson(e.target.value)}
+                  placeholder='{"tcb_info": "...", "tcb_info_issuer_chain": "...", "qe_identity": "...", ...}'
+                  rows={3}
                   className="field mt-1 font-mono text-xs"
                 />
               </div>

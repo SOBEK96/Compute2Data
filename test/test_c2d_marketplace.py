@@ -8,6 +8,7 @@ from conftest import (
     OUTPUT_COMMITMENT,
     address_hex,
     build_attestation_quote,
+    build_attestation_quote_with_binding_mismatch,
     fund_job,
     future_iso,
     inconclusive_assessment,
@@ -204,18 +205,20 @@ def test_forged_model_attestation_is_slashed_deterministically(
 def test_tampered_quote_signature_is_rejected(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
+    """A quote whose ISV report signature does not verify under its attestation
+    key is not a genuine attestation: the call reverts and the job stays open."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
 
     direct_vm.sender = direct_alice
-    result = contract.submit_execution_proof(
-        "job-001",
-        build_attestation_quote(tamper_signature=True),
-        OUTPUT_COMMITMENT,
-    )
-    assert result["status"] == "SLASHED"
-    assert result["violation_code"] == "SIGNATURE_INVALID"
+    with direct_vm.expect_revert("ERR_INVALID_ATTESTATION: non-genuine certificate chain rejected (SIGNATURE_INVALID)"):
+        contract.submit_execution_proof(
+            "job-001",
+            build_attestation_quote(tamper_signature=True),
+            OUTPUT_COMMITMENT,
+        )
+    assert contract.get_job("job-001")["status"] == "FUNDED"
 
 
 def test_untrusted_enclave_measurement_is_rejected(
@@ -457,7 +460,7 @@ def test_accepted_appeal_returns_bond_and_reverses_slash(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -591,13 +594,14 @@ def test_inconclusive_appeal_rejected_slashes_provider_and_refunds_requester(
         OUTPUT_COMMITMENT,
     )
 
-    # Provider appeals with a tampered (invalid) quote — appeal will be rejected.
+    # Provider appeals with genuine evidence bound to different work -- the
+    # appeal is filed but rejected on adjudication.
     direct_vm.sender = direct_alice
     direct_vm.value = ONE_GEN
     contract.appeal_job_verdict(
         "job-001",
-        "Attempting appeal with invalid evidence.",
-        build_attestation_quote(tamper_signature=True),
+        "Attempting appeal with evidence for different work.",
+        build_attestation_quote_with_binding_mismatch(),
     )
     direct_vm.value = 0
 

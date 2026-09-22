@@ -5,11 +5,11 @@ import json
 import pytest
 
 from dcap_fixtures import (
-    DEFAULT_FMSPC,
+    TEST_SGX_ROOT_CA_PUBKEY,
     assert_pinned_keys_match,
     build_binary_quote,
+    build_collateral,
     expected_report_data,
-    tcb_collateral_handler,
 )
 
 
@@ -18,14 +18,11 @@ DATASET_STAKE = 10 * ONE_GEN
 JOB_COLLATERAL = 2 * ONE_GEN
 JOB_PRICE = 3 * ONE_GEN
 
-# Default measurements provisioned inside contracts/c2d_marketplace.py, mirrored
-# here so the fixtures reproduce the exact bytes the contract parses and the
-# measurements the contract whitelists.
+# Harness enclave measurements. The contract's trust registry starts empty; the
+# direct_deploy fixture whitelists these as the admin, the way an operator
+# whitelists an audited enclave after deployment.
 DEFAULT_ENCLAVE_MEASUREMENT = "11" * 32
 DEFAULT_ENCLAVE_SIGNER = "22" * 32
-
-# Must match DEFAULT_ATTESTATION_ENDPOINT in contracts/c2d_marketplace.py.
-ATTESTATION_ENDPOINT = "https://api.trustedservices.intel.com/sgx/certification/v4/tcb"
 
 # The dataset_id fund_job registers the job against; the report_data binding is
 # sha256(dataset_id + compute_spec_hash + output_data_hash).
@@ -89,18 +86,21 @@ def build_attestation_quote(
     result_status="COMPLETED",
     tamper_signature=False,
     drop_compute_spec_commitment=False,
-    fmspc=DEFAULT_FMSPC,
+    debug=False,
+    collateral=None,
 ):
-    """Build a genuine binary DCAP quote wrapped with its artifact, as JSON.
+    """Build a proof envelope: SGX v3 quote + Intel-format PCS collateral + artifact.
 
-    The measurements and report_data live in the signed binary report body; the
-    report_data is the canonical sha256(dataset_id + compute_spec_hash +
-    output_data_hash) that the contract re-derives on chain. The quote is signed
-    with real ECDSA P-256 keys whose PCK chain terminates at the pinned root.
+    The measurements and report_data live in the signed report body; report_data
+    is the canonical sha256(dataset_id + compute_spec_hash + output_data_hash)
+    the contract re-derives on chain. The quote's cert_data_type 5 X.509 PCK
+    chain and the collateral are signed by the harness PKI (see dcap_fixtures).
 
-    tamper_signature=True: zero the ISV report signature (SIGNATURE_INVALID path).
+    tamper_signature=True: zero the ISV report signature (reverts, SIGNATURE_INVALID).
     drop_compute_spec_commitment=True: omit the artifact field
-        (COMPUTE_SPEC_COMMITMENT_INVALID path).
+        (COMPUTE_SPEC_COMMITMENT_INVALID slash).
+    debug=True: set the SGX DEBUG attribute (DEBUG_ENCLAVE slash).
+    collateral: override the PCS collateral dict.
     """
     compute_spec_commitment = hashlib.sha256(compute_spec.encode("utf-8")).hexdigest()
     output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
@@ -109,8 +109,8 @@ def build_attestation_quote(
         mrenclave=mrenclave,
         mrsigner=mrsigner,
         report_data=report_data,
-        fmspc=fmspc,
         tamper_signature=tamper_signature,
+        debug=debug,
     )
     artifact = {
         "dataset_id": dataset_id,
@@ -123,7 +123,13 @@ def build_attestation_quote(
     }
     if not drop_compute_spec_commitment:
         artifact["compute_spec_commitment"] = compute_spec_commitment
-    return json.dumps({"artifact": artifact, "dcap_quote": dcap_quote}, sort_keys=True)
+    return evidence_envelope(artifact, dcap_quote, build_collateral() if collateral is None else collateral)
+
+
+def evidence_envelope(artifact, dcap_quote, collateral):
+    return json.dumps(
+        {"artifact": artifact, "dcap_quote": dcap_quote, "collateral": collateral}, sort_keys=True
+    )
 
 
 def build_attestation_quote_with_binding_mismatch(
@@ -136,8 +142,8 @@ def build_attestation_quote_with_binding_mismatch(
 
     The artifact fields are all correct, but the signed report_data is derived
     from a different output, so the contract's re-derived binding != report_data
-    (BINDING_MISMATCH). The DCAP signature chain is internally valid for the
-    sealed report_data, so SIGNATURE_INVALID is not reached first.
+    (BINDING_MISMATCH). The quote itself is genuine and fully signed for the
+    sealed report_data, so authentication passes and policy slashes it.
     """
     compute_spec_commitment = hashlib.sha256(COMPUTE_SPEC.encode("utf-8")).hexdigest()
     output_data_hash = hashlib.sha256(output_commitment.encode("utf-8")).hexdigest()
@@ -160,39 +166,43 @@ def build_attestation_quote_with_binding_mismatch(
         "output_data_hash": output_data_hash,
         "result_status": "COMPLETED",
     }
-    return json.dumps({"artifact": artifact, "dcap_quote": dcap_quote}, sort_keys=True)
+    return evidence_envelope(artifact, dcap_quote, build_collateral())
 
 
-def install_attestation_authority(direct_vm):
-    """Install the STAND-IN TCB collateral service as the live web handler.
+def _install_llm_text_shim():
+    """Hand exec_prompt(response_format='json') the raw JSON text it decodes.
 
-    Every submit_execution_proof / resolve_appeal fetches TCB collateral for the
-    quote's FMSPC via gl.nondet.web.get; this handler returns a test-signed
-    (stand-in) UpToDate status. The contract verifies that signature on chain
-    against its pinned Intel TCB signing key, so the verdict does not come from
-    the endpoint. This is the project-defined stand-in JSON, not Intel's real PCS
-    TCB Info. A test can override the collateral by registering an explicit
-    direct_vm.mock_web(...), which takes precedence over this fallback handler.
+    genlayer-test 0.30.0rc2's direct-mode LLM mock JSON-parses a mocked reply
+    into a dict, but the py-genlayer 5jycge SDK this contract runs on decodes
+    the nondet response itself and requires text ("JSON result is not text").
+    Return the mocked reply verbatim, as a node delivers raw model output.
     """
-    direct_vm._live_web_handler = tcb_collateral_handler
+    from gltest.direct import wasi_mock
+
+    if getattr(wasi_mock, "_c2d_llm_text_shim", False):
+        return
+    original = wasi_mock._handle_llm_request
+
+    def handler(vm, data):
+        response = vm._match_llm_mock(data.get("prompt", ""))
+        if isinstance(response, str):
+            return {"ok": response}
+        if isinstance(response, (dict, list)):
+            return {"ok": json.dumps(response)}
+        return original(vm, data)
+
+    wasi_mock._handle_llm_request = handler
+    wasi_mock._c2d_llm_text_shim = True
 
 
 @pytest.fixture(autouse=True)
-def _attestation_authority_autouse(direct_vm):
-    """Make the collateral service reachable for every direct-mode test.
-
-    Installed unconditionally so a test that stands up its own provider (without
-    stake_and_register) still reaches a working collateral service. Registering
-    an explicit mock_web for the endpoint still overrides this fallback.
-    """
+def _harness_setup(direct_vm):
     assert_pinned_keys_match()
-    install_attestation_authority(direct_vm)
+    _install_llm_text_shim()
     return direct_vm
 
 
 def stake_and_register(direct_vm, contract, provider):
-    # Make the remote attestation authority reachable for the whole test.
-    install_attestation_authority(direct_vm)
     direct_vm.sender = provider
     direct_vm.value = DATASET_STAKE + (2 * JOB_COLLATERAL)
     contract.stake_provider()
@@ -272,8 +282,12 @@ def direct_deploy(direct_vm):
                         path = candidate.resolve()
                         break
         if "c2d_marketplace.py" in str(path) and not args:
-            from dcap_fixtures import TEST_SGX_ROOT_CA_PUBKEY, TEST_TCB_SIGNING_PUBKEY
-            return deploy_contract(path, direct_vm, TEST_SGX_ROOT_CA_PUBKEY, TEST_TCB_SIGNING_PUBKEY, sdk_version=sdk_version, **kwargs)
+            # Harness deploy: pin the harness root and, as the admin, whitelist
+            # the harness enclave measurements.
+            contract = deploy_contract(path, direct_vm, TEST_SGX_ROOT_CA_PUBKEY, sdk_version=sdk_version, **kwargs)
+            contract.set_trusted_enclave(DEFAULT_ENCLAVE_MEASUREMENT, True)
+            contract.set_trusted_signer(DEFAULT_ENCLAVE_SIGNER, True)
+            return contract
         return deploy_contract(path, direct_vm, *args, sdk_version=sdk_version, **kwargs)
 
     return _deploy

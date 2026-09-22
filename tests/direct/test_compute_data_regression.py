@@ -88,21 +88,24 @@ def test_missing_compute_spec_commitment_is_rejected_and_settled(
 def test_forged_signature_hash_is_rejected(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
-    """A client-forged (zeroed) signature never matches the enclave re-derived
-    signature, so the quote is rejected as SIGNATURE_INVALID."""
+    """A client-forged (zeroed) ISV report signature does not verify under the
+    quote's attestation key, so the evidence is not a genuine attestation: the
+    call reverts with ERR_INVALID_ATTESTATION and no funds move."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
 
     direct_vm.sender = direct_alice
-    result = contract.submit_execution_proof(
-        "job-001",
-        build_attestation_quote(tamper_signature=True),
-        OUTPUT_COMMITMENT,
-    )
-    assert result["status"] == "SLASHED"
-    assert result["violation_code"] == "SIGNATURE_INVALID"
-    assert result["attestation_status"] == "ENCLAVE_REJECTED"
+    with direct_vm.expect_revert("ERR_INVALID_ATTESTATION: non-genuine certificate chain rejected (SIGNATURE_INVALID)"):
+        contract.submit_execution_proof(
+            "job-001",
+            build_attestation_quote(tamper_signature=True),
+            OUTPUT_COMMITMENT,
+        )
+    job = contract.get_job("job-001")
+    assert job["status"] == "FUNDED"
+    assert job["attestation_status"] == "PENDING"
+    assert contract.get_marketplace_stats()["total_escrowed"] == JOB_PRICE
 
 
 def test_forged_binding_report_data_is_rejected(
@@ -406,12 +409,12 @@ def test_terminal_state_jobs_are_not_cancellable(
 #    hanging balances, for SLASHED-origin and INCONCLUSIVE-origin appeals.
 # =============================================================================
 
-def _slash_via_forged_signature(direct_vm, contract, provider):
-    """Drive job-001 into SLASHED via a forged-signature attestation."""
+def _slash_via_binding_mismatch(direct_vm, contract, provider):
+    """Drive job-001 into SLASHED with a genuine attestation of other work."""
     direct_vm.sender = provider
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -424,7 +427,7 @@ def test_slashed_appeal_accepted_reverses_slash_and_returns_bond(
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
-    _slash_via_forged_signature(direct_vm, contract, direct_alice)
+    _slash_via_binding_mismatch(direct_vm, contract, direct_alice)
 
     direct_vm.sender = direct_alice
     direct_vm.value = ONE_GEN
@@ -459,14 +462,14 @@ def test_slashed_appeal_rejected_forfeits_bond_and_keeps_slash(
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
-    _slash_via_forged_signature(direct_vm, contract, direct_alice)
+    _slash_via_binding_mismatch(direct_vm, contract, direct_alice)
 
     direct_vm.sender = direct_alice
     direct_vm.value = ONE_GEN
     contract.appeal_job_verdict(
         "job-001",
-        "Disputing the slash with invalid evidence.",
-        build_attestation_quote(tamper_signature=True),
+        "Disputing the slash with evidence for different work.",
+        build_attestation_quote_with_binding_mismatch(),
     )
     direct_vm.value = 0
 
@@ -551,8 +554,8 @@ def test_inconclusive_appeal_rejected_slashes_and_refunds_requester(
     direct_vm.value = ONE_GEN
     contract.appeal_job_verdict(
         "job-001",
-        "Appealing with invalid evidence after an inconclusive verdict.",
-        build_attestation_quote(tamper_signature=True),
+        "Appealing with evidence for different work after an inconclusive verdict.",
+        build_attestation_quote_with_binding_mismatch(),
     )
     direct_vm.value = 0
 
@@ -581,7 +584,7 @@ def test_unadjudicated_appeal_times_out_and_returns_bond(
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
-    _slash_via_forged_signature(direct_vm, contract, direct_alice)
+    _slash_via_binding_mismatch(direct_vm, contract, direct_alice)
 
     direct_vm.sender = direct_alice
     direct_vm.value = ONE_GEN

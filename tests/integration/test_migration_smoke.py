@@ -1,16 +1,11 @@
-"""Live integration validation of the v0.3.0-migrated contract.
+"""Live integration validation of the deployed contract on GenLayer Studio-Dev.
 
-The gltest harness (genlayer-test 0.29.2, the newest published) cannot load or
-even discover a `gl.contract.Contract`-based contract -- its direct loader raises
-"unexpected end of memory" and its factory only recognizes the legacy `gl.Contract`
-base. So this suite validates the migration the way the direct harness cannot: by
-exercising the ALREADY-DEPLOYED contract on the real GenLayer Studio GenVM (the
-py-genlayer 5jycge runner) through read-only CLI calls.
-
-The contract was deployed to studio-dev at C2D_ADDRESS (deploy tx returned
-FINISHED_WITH_RETURN / execution_result SUCCESS -- the pre-migration old-idiom
-contract returned FINISHED_WITH_ERROR at the same node, which is what this
-migration fixes). Read calls take no fees and are deterministic.
+The direct suite (tests/direct, test/) runs the contract in-process. This suite
+checks the ALREADY-DEPLOYED contract on the real GenLayer Studio GenVM (the
+py-genlayer 5jycge runner) through read-only CLI calls: the market parameters,
+and that the deployment pins the genuine Intel SGX Root CA and advertises the
+Intel SGX DCAP quote / PCS collateral formats it verifies. Read calls take no
+fees and are deterministic.
 
 Run: pytest tests/integration/test_migration_smoke.py -v -s
 (requires the genlayer CLI configured for studio-dev and network reachable).
@@ -23,7 +18,7 @@ import subprocess
 import pytest
 
 
-C2D_ADDRESS = "0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9"
+C2D_ADDRESS = "0xA12282C872FB3416763399065cA63DAcD5e78a3C"
 RPC_URL = "https://studio-dev.genlayer.com/api"
 ONE_GEN = 10**18
 
@@ -63,6 +58,10 @@ def test_live_market_config():
 @pytest.mark.integration
 def test_live_attestation_config():
     att = _call("get_attestation_config")
-    assert att["attestation_status_ok"] == "UpToDate"
-    assert len(att["sgx_root_ca_pubkey"]) == 128
-    assert len(att["tcb_signing_pubkey"]) == 128
+    assert att["intel_root_ca_pinned"] is True
+    assert att["sgx_root_ca_pubkey"] == (
+        "0ba9c4c0c0c86193a3fe23d6b02cda10a8bbd4e88e48b4458561a36e705525f5"
+        "67918e2edc88e40d860bd0cc4ee26aacc988e505a953558c453f6b0904ae7394"
+    )
+    assert att["quote_format"].startswith("Intel SGX ECDSA quote v3, cert_data_type 5")
+    assert att["accepted_tcb_statuses"] == ["UpToDate"]

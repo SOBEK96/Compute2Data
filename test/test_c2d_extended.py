@@ -387,37 +387,35 @@ def test_untrusted_signer_is_rejected(
 def test_malformed_quote_json_is_rejected(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
-    """A quote that is not valid JSON is slashed.
-
-    Note: the contract's post-parse output_commitment cross-check fires before
-    any MALFORMED_QUOTE code can be returned (inspection["output_commitment"] is
-    "" for failed parses, which never equals the caller's non-empty param). The
-    job is still slashed — only the violation_code is caller-side OUTPUT_COMMITMENT_INVALID.
-    """
+    """Evidence that is not valid JSON is not an attestation at all: the call
+    reverts with ERR_INVALID_ATTESTATION (MALFORMED_QUOTE) and the job stays
+    FUNDED for a genuine proof."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
 
     direct_vm.sender = direct_alice
-    result = contract.submit_execution_proof(
-        "job-001",
-        "{ this is not valid json !!!",
-        OUTPUT_COMMITMENT,
-    )
-    assert result["status"] == "SLASHED"
+    with direct_vm.expect_revert("ERR_INVALID_ATTESTATION: non-genuine certificate chain rejected (MALFORMED_QUOTE)"):
+        contract.submit_execution_proof(
+            "job-001",
+            "{ this is not valid json !!!",
+            OUTPUT_COMMITMENT,
+        )
+    assert contract.get_job("job-001")["status"] == "FUNDED"
 
 
 def test_empty_quote_object_is_rejected(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
-    """An empty JSON object (no enclave/artifact) is slashed for the same reason."""
+    """An empty JSON object (no quote/artifact) reverts for the same reason."""
     contract = direct_deploy(CONTRACT_PATH)
     stake_and_register(direct_vm, contract, direct_alice)
     fund_job(direct_vm, contract, direct_bob)
 
     direct_vm.sender = direct_alice
-    result = contract.submit_execution_proof("job-001", "{}", OUTPUT_COMMITMENT)
-    assert result["status"] == "SLASHED"
+    with direct_vm.expect_revert("ERR_INVALID_ATTESTATION: non-genuine certificate chain rejected (MALFORMED_QUOTE)"):
+        contract.submit_execution_proof("job-001", "{}", OUTPUT_COMMITMENT)
+    assert contract.get_job("job-001")["status"] == "FUNDED"
 
 
 def test_compute_spec_commitment_missing_from_artifact(
@@ -670,7 +668,7 @@ def test_appeal_bond_below_minimum_is_rejected(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -695,7 +693,7 @@ def test_third_party_cannot_appeal_job(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -743,7 +741,7 @@ def test_appeal_window_expired_before_filing_is_rejected(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -771,7 +769,7 @@ def test_resolve_appeal_on_non_appealed_job_is_rejected(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -819,7 +817,7 @@ def test_resolve_appeal_checks_result_status_must_be_completed(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "job-001",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 
@@ -961,7 +959,7 @@ def test_marketplace_stats_reflect_multiple_job_lifecycle_events(
     direct_vm.sender = direct_alice
     contract.submit_execution_proof(
         "stats-job-3",
-        build_attestation_quote(tamper_signature=True),
+        build_attestation_quote_with_binding_mismatch(),
         OUTPUT_COMMITMENT,
     )
 

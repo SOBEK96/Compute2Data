@@ -3,7 +3,7 @@
 **Specification**: [`specs/001-compute2data-autonomous-marketplace/spec.md`](file:///Users/ehs4n/Compute2Data/specs/001-compute2data-autonomous-marketplace/spec.md)  
 **Status**: `COMPLETED & RATIFIED`  
 **Network**: `GenLayer StudioNet`  
-**Contract**: [`0xbA6F26bbC123FE1336c719F0FE71343167D1dBa9`](file:///Users/ehs4n/Compute2Data/contracts/c2d_marketplace.py)
+**Contract**: [`0xA12282C872FB3416763399065cA63DAcD5e78a3C`](file:///Users/ehs4n/Compute2Data/contracts/c2d_marketplace.py)
 
 ---
 
