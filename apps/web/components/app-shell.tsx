@@ -28,6 +28,7 @@ import { useState, type ReactNode } from "react";
 
 import { contractAddress, isContractConfigured, networkName } from "@/lib/contract";
 import { shortAddress } from "@/lib/market-data";
+import { ensureWalletChain } from "@/lib/wallet";
 
 import { useWallet } from "./wallet-provider";
 
@@ -38,7 +39,8 @@ const navigation = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { account, status, error, connect, disconnect } = useWallet();
+  const { account, status, error, mode, hasInjectedWallet, connect, connectGuest, disconnect } =
+    useWallet();
   const [copied, setCopied] = useState(false);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
 
@@ -49,32 +51,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const switchNetworkMetaMask = async () => {
+  const switchNetwork = async () => {
     if (typeof window === "undefined" || !window.ethereum) return;
     try {
-      await window.ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0xf22d" }], // 61997 Studio-Dev (Studio Next)
-      });
-    } catch (switchError: any) {
-      if (switchError.code === 4902 || switchError.data?.originalError?.code === 4902) {
-        try {
-          await window.ethereum.request({
-            method: "wallet_addEthereumChain",
-            params: [
-              {
-                chainId: "0xf22d",
-                chainName: "GenLayer Studio-Dev",
-                nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
-                rpcUrls: ["https://studio-dev.genlayer.com/api"],
-                blockExplorerUrls: ["https://explorer-studio-dev.genlayer.com"],
-              },
-            ],
-          });
-        } catch (addError) {
-          console.error("Failed to add GenLayer network:", addError);
-        }
-      }
+      await ensureWalletChain(window.ethereum);
+    } catch (switchError) {
+      console.error("Network switch was rejected:", switchError);
     }
   };
 
@@ -162,9 +144,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="ml-auto hidden items-center gap-3 lg:flex">
             <button
-              onClick={switchNetworkMetaMask}
+              onClick={switchNetwork}
               className="flex items-center gap-2 rounded-xl border border-line bg-carbon/80 px-3.5 py-2 font-mono text-[11px] text-muted transition hover:border-cobalt-400/60 hover:text-paper"
-              title="Click to switch or add GenLayer StudioNet in MetaMask"
+              title="Click to switch or add GenLayer StudioNet in your wallet"
             >
               <CircleDot
                 className={clsx(
@@ -186,6 +168,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 className="flex shrink-0 items-center gap-2.5 rounded-xl border border-line-bright/60 bg-gradient-to-b from-elevated to-carbon px-3.5 py-2.5 text-xs font-bold text-paper shadow-card transition duration-200 hover:border-cyan-400/60"
               >
                 <span className="h-2 w-2 rounded-full bg-mineral shadow-[0_0_8px_rgba(130,235,197,0.8)]" />
+                {mode === "guest" ? (
+                  <span className="rounded bg-cyan-400/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-cyan-300">
+                    Guest
+                  </span>
+                ) : null}
                 <span>{shortAddress(account)}</span>
                 <ChevronDown className="h-3.5 w-3.5 text-muted" />
               </button>
@@ -200,15 +187,26 @@ export function AppShell({ children }: { children: ReactNode }) {
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={() => void connect()}
-              disabled={status === "connecting"}
-              className="button-primary shrink-0 px-4 py-2.5"
-            >
-              <Wallet className="h-4 w-4" />
-              <span>{status === "connecting" ? "Connecting..." : "Connect Wallet"}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={connectGuest}
+                className="button-secondary shrink-0 px-3 py-2.5 text-xs"
+                title="Use a temporary in-browser burner key; no wallet extension needed"
+              >
+                <Sparkles className="h-4 w-4 text-cyan-300" />
+                <span>{hasInjectedWallet ? "Guest Mode" : "Demo / Guest Mode"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void connect()}
+                disabled={status === "connecting"}
+                className="button-primary shrink-0 px-4 py-2.5"
+              >
+                <Wallet className="h-4 w-4" />
+                <span>{status === "connecting" ? "Connecting..." : "Connect Wallet"}</span>
+              </button>
+            </div>
           )}
         </div>
 
@@ -244,7 +242,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="panel max-w-md flex-1 rounded-2xl p-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-line pb-4">
               <div>
-                <h3 className="text-base font-bold text-paper">Connected Web3 Wallet</h3>
+                <h3 className="text-base font-bold text-paper">
+                  {mode === "guest" ? "Guest Burner Wallet" : "Connected Web3 Wallet"}
+                </h3>
                 <p className="font-mono text-[10px] text-muted">GenLayer StudioNet Session</p>
               </div>
               <button
@@ -282,13 +282,22 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
               </div>
 
-              <button
-                onClick={switchNetworkMetaMask}
-                className="button-secondary w-full justify-center text-xs"
-              >
-                <ArrowRightLeft className="h-3.5 w-3.5 text-cobalt-300" />
-                Switch / Add Network in MetaMask
-              </button>
+              {mode === "guest" ? (
+                <p className="rounded-xl border border-cyan-400/30 bg-cyan-400/5 p-3 text-[11px] leading-relaxed text-muted">
+                  Guest Mode signs with a temporary key kept only in this browser tab. It
+                  holds no funds, so calls that attach GEN (staking, paid compute
+                  requests) will fail until the address is funded. Disconnecting discards
+                  the key.
+                </p>
+              ) : (
+                <button
+                  onClick={switchNetwork}
+                  className="button-secondary w-full justify-center text-xs"
+                >
+                  <ArrowRightLeft className="h-3.5 w-3.5 text-cobalt-300" />
+                  Switch / Add Network in Wallet
+                </button>
+              )}
 
               <button
                 onClick={() => {

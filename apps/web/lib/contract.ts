@@ -3,6 +3,8 @@ import { studionet } from "genlayer-js/chains";
 import type { CalldataEncodable } from "genlayer-js/types";
 import { ExecutionResult, TransactionStatus } from "genlayer-js/types";
 
+import { ensureWalletChain, guestSignerFor } from "./wallet";
+
 export type HexAddress = `0x${string}`;
 
 export type ContractDataset = {
@@ -230,16 +232,23 @@ async function writeAndWait(
   args: CalldataEncodable[],
   value: bigint,
 ) {
-  if (typeof window === "undefined" || !window.ethereum) {
-    throw new Error("Install an EIP-1193 wallet to sign this transaction.");
+  if (typeof window === "undefined") {
+    throw new Error("Transactions can only be signed in the browser.");
   }
 
-  const client = createClient({
-    chain: studionet,
-    account,
-    provider: window.ethereum,
-  });
-  await client.connect("studionet");
+  const guestSigner = guestSignerFor(account);
+  let client;
+  if (guestSigner) {
+    client = createClient({ chain: studionet, account: guestSigner });
+  } else {
+    if (!window.ethereum) {
+      throw new Error("Install an EIP-1193 wallet, or use Guest Mode, to sign this transaction.");
+    }
+    // Deliberately not `client.connect()`: it probes MetaMask Snaps, which
+    // other wallets reject with "wallet_getPermissions" handler errors.
+    await ensureWalletChain(window.ethereum);
+    client = createClient({ chain: studionet, account, provider: window.ethereum });
+  }
   const hash = await client.writeContract({
     address: requireContractAddress(),
     functionName,
