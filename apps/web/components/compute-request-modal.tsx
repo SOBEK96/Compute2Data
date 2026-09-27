@@ -131,7 +131,7 @@ export function ComputeRequestModal({ dataset, onClose }: ComputeRequestModalPro
             <div className="space-y-2">
               <h3 className="text-2xl font-extrabold text-paper">Compute Job Escrowed On-Chain!</h3>
               <p className="mx-auto max-w-md text-xs leading-relaxed text-muted">
-                Your compute request has been committed on GenLayer StudioNet. Escrowed GEN is locked until the provider submits an SGX enclave execution proof and AI validators confirm validity.
+                Your compute request has been committed on GenLayer Studio-Dev. Escrowed GEN is locked until the provider submits an SGX enclave execution proof and AI validators confirm validity.
               </p>
             </div>
 
@@ -212,7 +212,7 @@ export function ComputeRequestModal({ dataset, onClose }: ComputeRequestModalPro
                 <strong className="font-mono text-paper">{dataset.priceLabel}</strong>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-muted">Network Gas Fee (StudioNet):</span>
+                <span className="text-muted">Network Gas Fee (Studio-Dev):</span>
                 <strong className="font-mono text-mineral">0.00 GEN (Gasless)</strong>
               </div>
               <div className="flex items-center justify-between border-t border-line/80 pt-2 text-xs">

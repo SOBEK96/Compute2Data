@@ -102,7 +102,7 @@ export function MarketplaceDiscovery() {
               </span>
               <span className="rounded-full border border-line bg-carbon/80 px-3 py-1 font-mono text-[10px] text-muted">
                 {loadState === "live"
-                  ? "Connected to StudioNet Contract"
+                  ? "Connected to Studio-Dev Contract"
                   : loadState === "loading"
                     ? "Reading On-Chain Index..."
                     : "Live Protocol Ready"}
@@ -168,7 +168,7 @@ export function MarketplaceDiscovery() {
               <div className="flex items-center justify-between border-b border-line pb-4">
                 <div>
                   <span className="label-caps text-cyan-300">Consensus Engine</span>
-                  <h3 className="mt-1 text-lg font-extrabold text-paper">GenLayer StudioNet</h3>
+                  <h3 className="mt-1 text-lg font-extrabold text-paper">GenLayer Studio-Dev</h3>
                 </div>
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-mineral/30 bg-mineral/10 text-mineral">
                   <Activity className="h-5 w-5 animate-pulse" />

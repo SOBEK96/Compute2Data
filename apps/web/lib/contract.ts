@@ -1,9 +1,11 @@
 import { createClient } from "genlayer-js";
-import { studionet } from "genlayer-js/chains";
 import type { CalldataEncodable } from "genlayer-js/types";
 import { ExecutionResult, TransactionStatus } from "genlayer-js/types";
 
+import { c2dChain, DEFAULT_CONTRACT_ADDRESS } from "./network";
 import { ensureWalletChain, guestSignerFor } from "./wallet";
+
+export { networkName } from "./network";
 
 export type HexAddress = `0x${string}`;
 
@@ -176,16 +178,16 @@ export async function buildAttestationQuote(artifact: AttestationArtifact): Prom
   });
 }
 
-const configuredAddress = process.env.NEXT_PUBLIC_C2D_CONTRACT_ADDRESS ?? "";
+const configuredAddress =
+  process.env.NEXT_PUBLIC_C2D_CONTRACT_ADDRESS || DEFAULT_CONTRACT_ADDRESS;
 
 export const contractAddress = /^0x[0-9a-fA-F]{40}$/.test(configuredAddress)
   ? (configuredAddress as HexAddress)
   : null;
 
 export const isContractConfigured = contractAddress !== null;
-export const networkName = "GenLayer StudioNet";
 
-const readClient = createClient({ chain: studionet });
+const readClient = createClient({ chain: c2dChain });
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value instanceof Map) {
@@ -239,7 +241,7 @@ async function writeAndWait(
   const guestSigner = guestSignerFor(account);
   let client;
   if (guestSigner) {
-    client = createClient({ chain: studionet, account: guestSigner });
+    client = createClient({ chain: c2dChain, account: guestSigner });
   } else {
     if (!window.ethereum) {
       throw new Error("Install an EIP-1193 wallet, or use Guest Mode, to sign this transaction.");
@@ -247,7 +249,7 @@ async function writeAndWait(
     // Deliberately not `client.connect()`: it probes MetaMask Snaps, which
     // other wallets reject with "wallet_getPermissions" handler errors.
     await ensureWalletChain(window.ethereum);
-    client = createClient({ chain: studionet, account, provider: window.ethereum });
+    client = createClient({ chain: c2dChain, account, provider: window.ethereum });
   }
   const hash = await client.writeContract({
     address: requireContractAddress(),

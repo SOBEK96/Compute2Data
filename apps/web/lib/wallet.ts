@@ -1,8 +1,8 @@
 import { createAccount, generatePrivateKey } from "genlayer-js";
-import { studionet } from "genlayer-js/chains";
 import type { EIP1193Provider } from "viem";
 
 import type { HexAddress } from "./contract";
+import { c2dChain } from "./network";
 
 type RpcError = { code?: number; message?: string; data?: { originalError?: { code?: number } } };
 
@@ -32,7 +32,7 @@ export function isUnsupportedMethod(error: unknown) {
  * surfaced; any other failure lets the transaction proceed.
  */
 export async function ensureWalletChain(provider: EIP1193Provider) {
-  const chainId = `0x${studionet.id.toString(16)}` as const;
+  const chainId = `0x${c2dChain.id.toString(16)}` as const;
   try {
     const current = await provider.request({ method: "eth_chainId" });
     if (current === chainId) return;
@@ -46,11 +46,11 @@ export async function ensureWalletChain(provider: EIP1193Provider) {
         params: [
           {
             chainId,
-            chainName: studionet.name,
-            nativeCurrency: studionet.nativeCurrency,
-            rpcUrls: [...studionet.rpcUrls.default.http],
-            blockExplorerUrls: studionet.blockExplorers?.default.url
-              ? [studionet.blockExplorers.default.url]
+            chainName: c2dChain.name,
+            nativeCurrency: c2dChain.nativeCurrency,
+            rpcUrls: [...c2dChain.rpcUrls.default.http],
+            blockExplorerUrls: c2dChain.blockExplorers?.default.url
+              ? [c2dChain.blockExplorers.default.url]
               : undefined,
           },
         ],

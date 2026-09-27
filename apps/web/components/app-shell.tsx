@@ -71,7 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mineral opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-mineral" />
               </span>
-              GenLayer StudioNet AI Consensus Active
+              GenLayer Studio-Dev AI Consensus Active
             </span>
             <span className="hidden items-center gap-1 text-paper/80 sm:flex">
               <Zap className="h-3 w-3 text-cyan-400" /> Gasless Execution - 0 GEN Fee Required
@@ -146,7 +146,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button
               onClick={switchNetwork}
               className="flex items-center gap-2 rounded-xl border border-line bg-carbon/80 px-3.5 py-2 font-mono text-[11px] text-muted transition hover:border-cobalt-400/60 hover:text-paper"
-              title="Click to switch or add GenLayer StudioNet in your wallet"
+              title="Click to switch or add GenLayer Studio-Dev in your wallet"
             >
               <CircleDot
                 className={clsx(
@@ -245,7 +245,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <h3 className="text-base font-bold text-paper">
                   {mode === "guest" ? "Guest Burner Wallet" : "Connected Web3 Wallet"}
                 </h3>
-                <p className="font-mono text-[10px] text-muted">GenLayer StudioNet Session</p>
+                <p className="font-mono text-[10px] text-muted">GenLayer Studio-Dev Session</p>
               </div>
               <button
                 onClick={() => setWalletModalOpen(false)}
@@ -274,7 +274,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl border border-line bg-canvas/60 p-3 text-center">
                   <span className="label-caps block">Network</span>
-                  <span className="mt-1 block font-mono text-xs font-bold text-mineral">StudioNet</span>
+                  <span className="mt-1 block font-mono text-xs font-bold text-mineral">Studio-Dev</span>
                 </div>
                 <div className="rounded-xl border border-line bg-canvas/60 p-3 text-center">
                   <span className="label-caps block">Execution</span>
